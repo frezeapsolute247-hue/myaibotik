@@ -12,7 +12,7 @@ load_dotenv()
 TG_TOKEN = os.getenv("TG_TOKEN")
 API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")
 BASE_URL = os.getenv("BASE_URL", "https://api.groq.com/openai/v1")
-MODEL = "llama-3.1-8b-instant" 
+MODEL = "openai/gpt-oss-20b" # Вернул рабочую модель
 
 ADMIN_ID = 755116310
 
@@ -158,7 +158,6 @@ def call_groq_api(prompt, user_id, user_name):
     
     user_history = get_history(user_id)
     
-    # Промпт без личности Локса. Просто прямой, краткий ассистент.
     system_prompt = (
         "Ты — Serp AI, полноценный ИИ-ассистент в Telegram. "
         "Отвечай кратко (1–4 предложения), точно, без лишних вводных и повторов. "
