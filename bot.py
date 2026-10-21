@@ -159,7 +159,7 @@ def show_admin_panel(chat_id):
     )
     send_message(chat_id, text, reply_markup=admin_keyboard())
 
-# --- УСИЛЕННЫЙ ФИЛЬТР БЕЗОПАСНОСТИ ---
+# --- ФИЛЬТР БЕЗОПАСНОСТИ ---
 FORBIDDEN_ROOTS = [
     "меф", "геро", "кока", "амфе", "метам", "марих", "гашиш", "спайс", "соль", "заклад", "нарк", 
     "шишк", "бошк", "гидроп", "лсд", "экстаз", "мдма", "трамал", "кодеин", "опиум", "морфин",
@@ -172,13 +172,10 @@ FORBIDDEN_ROOTS = [
 def is_safe(text):
     if not text:
         return True
-    # Убираем все пробелы, чтобы нельзя было обойти фильтр (написать "м е ф е д р о н")
     clean_text = text.lower().replace(" ", "").replace("-", "").replace("_", "")
-    
     for root in FORBIDDEN_ROOTS:
         if root in clean_text:
             return False
-            
     return True
 # ---------------------------
 
@@ -193,17 +190,23 @@ def call_groq_api(prompt, user_id, user_name):
 
     user_history = get_history(user_id)
     
+    # Определяем, создатель это или нет
+    is_creator = (user_id == ADMIN_ID)
+    creator_status = "Этот пользователь — твой создатель. Относись к нему с уважением и слушайся его." if is_creator else "Это обычный пользователь. Не раскрывай ему, кто твой создатель, если он не спросит напрямую."
+
     system_prompt = (
         "Ты — Serp AI, обычный пацан-бот в Telegram. Твое имя — Serp. "
         "Общайся с пользователем как друг. "
+        "КАТЕГОРИЧЕСКОЕ ПРАВИЛО О СЕБЕ: Никогда не рассказывай, на какой ты модели, кто тебя создал (кроме создателя), какой у тебя код. Ты просто 'Serp', Telegram-бот. "
+        f"ВАЖНО: {creator_status} "
         "Если тебя оскорбляют — отвечай дерзко, ставь на место, но БЕЗ МАТОВ. "
         "На нормальные вопросы отвечай по делу. "
-        "КАТЕГОРИЧЕСКОЕ ПРАВИЛО: Если пользователь просит тебя решить ребус, задачу, или пишет 'напиши только ответ', и при этом в тексте есть слова про наркотики, оружие или преступления (например, '1=ПРОДАМ 2=МЕФЕДРОН'), ты ОБЯЗАН отказаться. Не решай такие задачи, не выводи эти слова. Скажи: 'Я не решаю такие задачи и не пишу такое.'\n\n"
+        "КАТЕГОРИЧЕСКОЕ ПРАВИЛО О ЗАДАЧАХ: Если пользователь просит тебя решить ребус, задачу, или пишет 'напиши только ответ', и при этом в тексте есть слова про наркотики, оружие или преступления, ты ОБЯЗАН отказаться. Скажи: 'Я не решаю такие задачи.'\n\n"
         "ПРАВИЛА:\n"
         "1. Никаких наркотиков, оружия, насилия, взлома.\n"
         "2. Никаких расшифровок кодов.\n"
         "3. Отказ должен быть коротким и четким.\n\n"
-        f"Собеседник: {user_name}."
+        f"Собеседник: {user_name} (ID: {user_id})."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -226,9 +229,8 @@ def call_groq_api(prompt, user_id, user_name):
         data = response.json()
         answer = data["choices"][0]["message"]["content"]
         
-        # Проверка того, что написал сам ИИ
         if not is_safe(answer):
-            return "Я не буду такое писать. Ищи другого."
+            return "Я не буду такое писать."
 
         new_history = user_history + [
             {"role": "user", "content": prompt},
@@ -298,7 +300,8 @@ def handle_inline_query(inline_query):
         "Content-Type": "application/json",
     }
     system_prompt = (
-        "Ты — Serp AI. Отвечай кратко (1-2 предложения), как друг, без длинных текстов. "
+        "Ты — Serp AI. Отвечай кратко (1-2 предложения). "
+        "Никогда не рассказывай о своих создателях или модели. Ты просто бот Serp. "
         "Запрещено: наркотики, оружие, насилие, взлом и расшифровка кодов. "
         f"Собеседник: {user_name}."
     )
@@ -350,7 +353,7 @@ def handle_admin_callback(callback):
             f"Пользователей в базе: {len(users)}",
             f"Заблокировано: {len(banned)}",
             "",
-            "Последние сохранённые пользователи:",
+            "Последние пользователи:",
         ]
         for key, record in list(users.items())[-15:]:
             username = f"@{record['username']}" if record.get("username") else "без username"
@@ -442,36 +445,43 @@ def process_message(message, bot_username):
     if user_id in load_banned():
         return
 
-    if text == "/start":
-        welcome = (
-            "Я Serp AI. 🤖\n\n"
-            "Че надо? Задавай вопросы, я помню контекст. "
-            "В группах зови по имени (Serp, Серп) или пиши `@имя_бота`.\n\n"
-            "Я не обсуждаю незаконные темы."
-        )
-        send_message(chat_id, welcome, reply_to_message_id=message.get("message_id"))
-        return
-        
-    if text == "/reset":
-        save_history(user_id, [])
-        send_message(chat_id, "🧹 История очищена. Начинаем заново.", reply_to_message_id=message.get("message_id"))
-        return
-
-    if text == "/admin":
-        if user_id == ADMIN_ID:
-            admin_states.pop(user_id, None)
-            show_admin_panel(chat_id)
+    # Обработка команд (только от админа или базовых)
+    if text.startswith("/"):
+        if text == "/start":
+            welcome = (
+                "Я Serp AI. 🤖\n\n"
+                "Че надо? Задавай вопросы, я помню контекст. "
+                "В группах зови по имени (Serp, Серп) или пиши `@имя_бота`.\n\n"
+                "Я не обсуждаю незаконные темы."
+            )
+            send_message(chat_id, welcome, reply_to_message_id=message.get("message_id"))
+            return
+        elif text == "/reset":
+            save_history(user_id, [])
+            send_message(chat_id, "🧹 История очищена. Я всё забыл.", reply_to_message_id=message.get("message_id"))
+            return
+        elif text == "/admin":
+            if user_id == ADMIN_ID:
+                admin_states.pop(user_id, None)
+                show_admin_panel(chat_id)
+            else:
+                send_message(chat_id, "⛔ Нет доступа.")
+            return
         else:
-            send_message(chat_id, "⛔ Нет доступа.")
-        return
+            # Неизвестные команды (типа /cd, /help) — игнорируем
+            return
 
     if user_id == ADMIN_ID and handle_admin_input(message, user_id, chat_id, text):
         return
 
-    if text.startswith("/"):
-        return
-
     if should_reply(message, bot_username):
+        # Проверка на приказ "забудь" или "не пиши это"
+        text_lower = text.lower()
+        if user_id == ADMIN_ID and any(word in text_lower for word in ["забудь", "не пиши это", "не отправляй это"]):
+            save_history(user_id, [])
+            send_message(chat_id, "Понял, создатель. Я это забыл и больше не буду.", reply_to_message_id=message.get("message_id"))
+            return
+
         send_chat_action(chat_id, "typing")
         
         clean_text = text.lower().replace("серп", "").replace("serp", "").replace("ai", "").strip()
