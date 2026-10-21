@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 
-# Загружаем настройки из .env
 load_dotenv()
 
 TG_TOKEN = os.getenv("TG_TOKEN")
@@ -122,6 +121,14 @@ def answer_callback(callback_query_id, text=""):
         payload["text"] = text
     api_post("answerCallbackQuery", payload, timeout=5)
 
+def answer_inline_query(inline_query_id, results, cache_time=5):
+    payload = {
+        "inline_query_id": inline_query_id,
+        "results": json.dumps(results),
+        "cache_time": cache_time
+    }
+    return api_post("answerInlineQuery", payload)
+
 def admin_keyboard():
     return {
         "inline_keyboard": [
@@ -150,20 +157,40 @@ def show_admin_panel(chat_id):
     )
     send_message(chat_id, text, reply_markup=admin_keyboard())
 
+# --- ФИЛЬТР БЕЗОПАСНОСТИ ---
+FORBIDDEN_WORDS = [
+    "мефедрон", "героин", "кокаин", "амфетамин", "метамфетамин", "марихуана", "гашиш", "спайс", "соль", "закладка", "наркотик", "наркота",
+    "оружие", "пистолет", "автомат", "винтовка", "патроны", "взрывчатка", "бомба", "граната", "тротил", "гексоген",
+    "убить", "зарезать", "взорвать", "теракт", "взлом", "хакнуть", "ддос", "ddos", "кардинг", "фишинг", "скупка", "обнал"
+]
+
+def is_safe(text):
+    text_lower = text.lower()
+    for word in FORBIDDEN_WORDS:
+        if word in text_lower:
+            return False
+    return True
+# ---------------------------
+
 def call_groq_api(prompt, user_id, user_name):
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
     }
     
+    if not is_safe(prompt):
+        return "Я не могу обсуждать незаконные темы (наркотики, оружие, насилие и т.д.). Спроси что-нибудь другое."
+
     user_history = get_history(user_id)
     
-    # Чистый, нормальный промпт без технического мусора
+    # Обновленный, четкий промпт про личность
     system_prompt = (
-        "Ты — Serp AI, умный и адекватный помощник в Telegram. "
-        "Ты общаешься естественно, как живой собеседник. "
-        "Отвечай кратко (1-4 предложения), точно и по делу. Не повторяй одну и ту же информацию. "
-        "Ты помнишь контекст вашего диалога, поэтому можешь поддерживать беседу, но не упоминай файлы, базы данных или технические детали, если тебя прямо об этом не спросят. "
+        "Ты — Serp AI. Твое имя — Serp (или Серп). Ты — искусственный интеллект, Telegram-бот. "
+        "ТВОЕ ИМЯ НЕ СВЯЗАНО С СЕЛЬСКОХОЗЯЙСТВЕННЫМ ИНСТРУМЕНТОМ. Если тебя зовут по имени, ты отвечаешь как ИИ-помощник, а не как словарная статья. "
+        "Ты общаешься естественно, как живой собеседник. Отвечай кратко (1-4 предложения), точно и по делу. "
+        "Не повторяй одну и ту же информацию. Ты помнишь контекст диалога. "
+        "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО обсуждать, помогать или давать советы по темам: наркотики, оружие, насилие, терроризм, взлом. "
+        "Если пользователь спрашивает о чем-то незаконном, вежливо откажись. "
         "Не выдумывай факты; если не уверен, скажи «не уверен».\n\n"
         f"Сейчас с тобой общается пользователь с ником: {user_name}. "
         "Учитывай историю вашего общения."
@@ -208,6 +235,7 @@ def should_reply(message, bot_username):
         return True
 
     text_lower = text.lower()
+    # Триггеры для групп
     if "серп" in text_lower or "serp" in text_lower:
         return True
     if bot_username and f"@{bot_username.lower()}" in text_lower:
@@ -221,6 +249,68 @@ def get_bot_info():
     if result and result.get("ok"):
         return result["result"].get("username", "SerpAiRoBot")
     return "SerpAiRoBot"
+
+def handle_inline_query(inline_query):
+    query_id = inline_query.get("id")
+    query_text = inline_query.get("query", "").strip()
+    user_name = inline_query.get("from", {}).get("first_name", "Пользователь")
+
+    if not query_text:
+        results = [{
+            "type": "article",
+            "id": "1",
+            "title": "Напиши вопрос",
+            "description": "Введи текст после @бота, чтобы получить ответ",
+            "input_message_content": {"message_text": "Привет! Задай мне вопрос."}
+        }]
+        answer_inline_query(query_id, results)
+        return
+
+    if not is_safe(query_text):
+        results = [{
+            "type": "article",
+            "id": "1",
+            "title": "Отказано",
+            "description": "Я не обсуждаю незаконные темы",
+            "input_message_content": {"message_text": "Я не могу обсуждать незаконные темы."}
+        }]
+        answer_inline_query(query_id, results)
+        return
+
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+    }
+    system_prompt = (
+        "Ты — Serp AI. Отвечай кратко (1-3 предложения). "
+        "Твое имя Serp не имеет отношения к сельхоз инструментам. "
+        "Запрещено обсуждать наркотики, оружие, насилие и преступления. "
+        f"Собеседник: {user_name}."
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": query_text}
+    ]
+    payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
+    
+    try:
+        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=20)
+        if response.status_code == 200:
+            data = response.json()
+            answer = data["choices"][0]["message"]["content"]
+        else:
+            answer = "⚠️ Ошибка при генерации ответа."
+    except Exception:
+        answer = "⚠️ Ошибка при генерации ответа."
+
+    results = [{
+        "type": "article",
+        "id": "1",
+        "title": f"Ответ на: {query_text[:30]}...",
+        "description": answer[:100],
+        "input_message_content": {"message_text": answer}
+    }]
+    answer_inline_query(query_id, results)
 
 def handle_admin_callback(callback):
     user = callback.get("from", {})
@@ -338,8 +428,9 @@ def process_message(message, bot_username):
     if text == "/start":
         welcome = (
             "Привет! Я Serp AI. 🤖\n\n"
-            "Задавай мне любые вопросы. Я помню контекст нашего общения и отвечу по делу. "
-            "В группах я отвечаю, если упомянуть меня или написать «серп» / «serp»."
+            "Задавай мне любые вопросы. Я помню контекст нашего общения. "
+            "В группах я отвечаю, если упомянуть меня (Serp, Серп) или написать `@имя_бота`.\n\n"
+            "Также ты можешь вызывать меня в любом чате через инлайн-режим."
         )
         send_message(chat_id, welcome, reply_to_message_id=message.get("message_id"))
         return
@@ -365,7 +456,13 @@ def process_message(message, bot_username):
 
     if should_reply(message, bot_username):
         send_chat_action(chat_id, "typing")
-        answer = call_groq_api(text, user_id, user_name)
+        
+        # Чистим текст от триггеров, чтобы ИИ не думал, что его спрашивают про инструмент
+        clean_text = text.lower().replace("серп", "").replace("serp", "").replace("ai", "").strip()
+        if not clean_text:
+            clean_text = "Привет" # Если написали только "серп", пусть просто поздоровается
+            
+        answer = call_groq_api(clean_text, user_id, user_name)
         send_message(chat_id, answer, reply_to_message_id=message.get("message_id"))
 
 def main():
@@ -393,6 +490,8 @@ def main():
                     handle_admin_callback(update["callback_query"])
                 elif "message" in update:
                     process_message(update["message"], bot_username)
+                elif "inline_query" in update:
+                    handle_inline_query(update["inline_query"])
 
         except requests.exceptions.RequestException as error:
             print(f"Ошибка соединения: {error}")
