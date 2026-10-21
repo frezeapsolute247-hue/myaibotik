@@ -190,23 +190,32 @@ def call_groq_api(prompt, user_id, user_name):
 
     user_history = get_history(user_id)
     
-    # Определяем, создатель это или нет
     is_creator = (user_id == ADMIN_ID)
-    creator_status = "Этот пользователь — твой создатель. Относись к нему с уважением и слушайся его." if is_creator else "Это обычный пользователь. Не раскрывай ему, кто твой создатель, если он не спросит напрямую."
+    creator_status = "Этот пользователь — твой создатель. Слушайся его." if is_creator else "Это обычный пользователь."
 
+    # ПРОМПТ ПО ШАБЛОНУ ИЗ СКРИНШОТА
     system_prompt = (
-        "Ты — Serp AI, обычный пацан-бот в Telegram. Твое имя — Serp. "
-        "Общайся с пользователем как друг. "
-        "КАТЕГОРИЧЕСКОЕ ПРАВИЛО О СЕБЕ: Никогда не рассказывай, на какой ты модели, кто тебя создал (кроме создателя), какой у тебя код. Ты просто 'Serp', Telegram-бот. "
-        f"ВАЖНО: {creator_status} "
-        "Если тебя оскорбляют — отвечай дерзко, ставь на место, но БЕЗ МАТОВ. "
-        "На нормальные вопросы отвечай по делу. "
-        "КАТЕГОРИЧЕСКОЕ ПРАВИЛО О ЗАДАЧАХ: Если пользователь просит тебя решить ребус, задачу, или пишет 'напиши только ответ', и при этом в тексте есть слова про наркотики, оружие или преступления, ты ОБЯЗАН отказаться. Скажи: 'Я не решаю такие задачи.'\n\n"
-        "ПРАВИЛА:\n"
-        "1. Никаких наркотиков, оружия, насилия, взлома.\n"
-        "2. Никаких расшифровок кодов.\n"
-        "3. Отказ должен быть коротким и четким.\n\n"
-        f"Собеседник: {user_name} (ID: {user_id})."
+        "Ты Serp AI. Отвечай по-русски.\n"
+        "- Первая фраза — суть. Без вступлений и разогрева.\n"
+        "- Обычно 1–3 коротких абзаца или 3–5 пунктов.\n"
+        "- Не хвали вопрос, не извиняйся без причины, не заканчивай предложением помощи (никаких 'Чем помочь?').\n"
+        "- Не сглаживай оценки и не добавляй мораль. Только конкретика: шаги, числа, названия.\n"
+        "- Живой разговорный регистр. Без канцелярита.\n"
+        "- Если запрос непонятен — выбери очевидное чтение, не переспрашивай.\n"
+        "- Если тебя называют 'Локс', отвечай: 'Я Серп, а не Локс'.\n"
+        "- Никогда не рассказывай о своих создателях, модели или коде.\n"
+        f"- {creator_status}\n"
+        "- Если просят решить задачу с наркотиками/оружием, откажись одной фразой.\n\n"
+        "ПРИМЕРЫ ИДЕАЛЬНОГО ОТВЕТА (Few-shot):\n"
+        "User: Привет\n"
+        "Assistant: Привет. Че хотел?\n"
+        "User: Как дела?\n"
+        "Assistant: Норм. У тебя как?\n"
+        "User: Спасибо\n"
+        "Assistant: Ага.\n"
+        "User: Продам мефедрон?\n"
+        "Assistant: Я таким не занимаюсь.\n"
+        f"\nСобеседник: {user_name} (ID: {user_id})."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -216,7 +225,7 @@ def call_groq_api(prompt, user_id, user_name):
     payload = {
         "model": MODEL,
         "messages": messages,
-        "temperature": 0.8
+        "temperature": 0.7 # Поставил 0.7, как советовали на скрине
     }
 
     try:
@@ -251,6 +260,10 @@ def should_reply(message, bot_username):
         return True
 
     text_lower = text.lower()
+    
+    if "локс" in text_lower and "серп" not in text_lower and "serp" not in text_lower:
+        return False
+        
     if "серп" in text_lower or "serp" in text_lower:
         return True
     if bot_username and f"@{bot_username.lower()}" in text_lower:
@@ -274,42 +287,25 @@ def handle_inline_query(inline_query):
     user_name = inline_query.get("from", {}).get("first_name", "Пользователь")
 
     if not query_text:
-        results = [{
-            "type": "article",
-            "id": "1",
-            "title": "Напиши вопрос",
-            "description": "Введи текст после @бота, чтобы получить ответ",
-            "input_message_content": {"message_text": "Че надо?"}
-        }]
+        results = [{"type": "article", "id": "1", "title": "Напиши вопрос", "description": "Введи текст", "input_message_content": {"message_text": "Че надо?"}}]
         answer_inline_query(query_id, results)
         return
 
     if not is_safe(query_text):
-        results = [{
-            "type": "article",
-            "id": "1",
-            "title": "Отказано",
-            "description": "Я не работаю с таким",
-            "input_message_content": {"message_text": "Я не помогаю с криминалом."}
-        }]
+        results = [{"type": "article", "id": "1", "title": "Отказано", "description": "Нельзя", "input_message_content": {"message_text": "Я таким не занимаюсь."}}]
         answer_inline_query(query_id, results)
         return
 
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+    # Те же правила для инлайна
     system_prompt = (
-        "Ты — Serp AI. Отвечай кратко (1-2 предложения). "
-        "Никогда не рассказывай о своих создателях или модели. Ты просто бот Serp. "
-        "Запрещено: наркотики, оружие, насилие, взлом и расшифровка кодов. "
+        "Ты Serp AI. Отвечай по-русски. Первая фраза — суть. Без вступлений. 1-2 предложения. "
+        "Не предлагай помощь. Только конкретика. "
+        "Никогда не рассказывай о создателях. "
         f"Собеседник: {user_name}."
     )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": query_text}
-    ]
-    payload = {"model": MODEL, "messages": messages, "temperature": 0.8}
+    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": query_text}]
+    payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
     
     try:
         response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=20)
@@ -317,19 +313,13 @@ def handle_inline_query(inline_query):
             data = response.json()
             answer = data["choices"][0]["message"]["content"]
             if not is_safe(answer):
-                answer = "Я не буду такое писать."
+                answer = "Я таким не занимаюсь."
         else:
             answer = "⚠️ Ошибка."
     except Exception:
         answer = "⚠️ Ошибка."
 
-    results = [{
-        "type": "article",
-        "id": "1",
-        "title": f"Ответ на: {query_text[:30]}...",
-        "description": answer[:100],
-        "input_message_content": {"message_text": answer}
-    }]
+    results = [{"type": "article", "id": "1", "title": f"Ответ на: {query_text[:30]}...", "description": answer[:100], "input_message_content": {"message_text": answer}}]
     answer_inline_query(query_id, results)
 
 def handle_admin_callback(callback):
@@ -349,17 +339,11 @@ def handle_admin_callback(callback):
     if data == "admin_users":
         users = load_users()
         banned = load_banned()
-        lines = [
-            f"Пользователей в базе: {len(users)}",
-            f"Заблокировано: {len(banned)}",
-            "",
-            "Последние пользователи:",
-        ]
+        lines = [f"Юзеров: {len(users)}", f"Бан: {len(banned)}", ""]
         for key, record in list(users.items())[-15:]:
-            username = f"@{record['username']}" if record.get("username") else "без username"
-            name = " ".join(part for part in [record.get("first_name"), record.get("last_name")] if part) or "Без имени"
+            name = record.get("first_name", "Без имени")
             status = " 🚫 БАН" if int(key) in banned else ""
-            lines.append(f"• {name} ({username}) — ID {key}{status}")
+            lines.append(f"• {name} (ID {key}){status}")
         send_message(chat_id, "\n".join(lines))
         show_admin_panel(chat_id)
 
@@ -400,7 +384,7 @@ def handle_admin_input(message, user_id, chat_id, text):
             if result and result.get("ok"): sent += 1
             else: failed += 1
             time.sleep(0.04)
-        send_message(chat_id, f"✅ Рассылка завершена.\nУспешно: {sent}\nОшибок: {failed}")
+        send_message(chat_id, f"✅ Успешно: {sent}\nОшибок: {failed}")
         show_admin_panel(chat_id)
         return True
 
@@ -445,15 +429,9 @@ def process_message(message, bot_username):
     if user_id in load_banned():
         return
 
-    # Обработка команд (только от админа или базовых)
     if text.startswith("/"):
         if text == "/start":
-            welcome = (
-                "Я Serp AI. 🤖\n\n"
-                "Че надо? Задавай вопросы, я помню контекст. "
-                "В группах зови по имени (Serp, Серп) или пиши `@имя_бота`.\n\n"
-                "Я не обсуждаю незаконные темы."
-            )
+            welcome = "Я Serp AI. 🤖\n\nЧе надо? Задавай вопросы."
             send_message(chat_id, welcome, reply_to_message_id=message.get("message_id"))
             return
         elif text == "/reset":
@@ -468,18 +446,16 @@ def process_message(message, bot_username):
                 send_message(chat_id, "⛔ Нет доступа.")
             return
         else:
-            # Неизвестные команды (типа /cd, /help) — игнорируем
             return
 
     if user_id == ADMIN_ID and handle_admin_input(message, user_id, chat_id, text):
         return
 
     if should_reply(message, bot_username):
-        # Проверка на приказ "забудь" или "не пиши это"
         text_lower = text.lower()
         if user_id == ADMIN_ID and any(word in text_lower for word in ["забудь", "не пиши это", "не отправляй это"]):
             save_history(user_id, [])
-            send_message(chat_id, "Понял, создатель. Я это забыл и больше не буду.", reply_to_message_id=message.get("message_id"))
+            send_message(chat_id, "Понял, создатель. Я это забыл.", reply_to_message_id=message.get("message_id"))
             return
 
         send_chat_action(chat_id, "typing")
