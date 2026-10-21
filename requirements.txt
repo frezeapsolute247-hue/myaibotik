@@ -2,5 +2,3 @@ requests
 openai
 python-dotenv
 flask
-telethon
-pexafy
