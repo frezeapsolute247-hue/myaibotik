@@ -9,7 +9,7 @@ from threading import Thread
 
 load_dotenv()
 
-TG_TOKEN = os.getenv("TG_TOKEN")
+TG_TOKEN = os.getenv("8912451981:AAHwlmI7A8c_7ZUGQsIMP7b21PJVdq3Bwv0")
 
 # ==========================================
 # КЛЮЧИ БЕРУТСЯ ИЗ НАСТРОЕК RENDER
