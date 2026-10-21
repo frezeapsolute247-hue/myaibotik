@@ -12,17 +12,21 @@ load_dotenv()
 TG_TOKEN = os.getenv("TG_TOKEN")
 
 # ==========================================
-# ВСТАВЬ СВОИ КЛЮЧИ СЮДА
+# КЛЮЧИ БЕРУТСЯ ИЗ НАСТРОЕК RENDER
 # ==========================================
 API_KEYS = [
-    os.getenv("GROQ_API_KEY"),   # Ключ 1 (из Render)
-    os.getenv("GROQ_API_KEY_2")  # Ключ 2 (из Render)
+    os.getenv("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"),      # Ключ 1 (Groq)
+    os.getenv("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"),    # Ключ 2 (Groq)
+    os.getenv("AQ.Ab8RN6LBOwhlcTPM6PAVyzNwwVEyFZrAwhIp3I1XHzzbq0q45g")     # Ключ 3 (Gemini)
 ]
-# Если хочешь прописать прямо в коде, замени os.getenv(...) на "gsk_..."
-# ==========================================
 
-BASE_URL = os.getenv("BASE_URL", "https://api.groq.com/openai/v1")
-MODEL = "openai/gpt-oss-20b"
+# Настройки для каждого ключа (модель Gemini актуальная)
+PROVIDERS = [
+    {"url": "https://api.groq.com/openai/v1", "model": "openai/gpt-oss-20b"},
+    {"url": "https://api.groq.com/openai/v1", "model": "llama-3.1-8b-instant"},
+    {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.5-flash-lite"}
+]
+# ==========================================
 
 ADMIN_ID = 755116310
 
@@ -37,8 +41,6 @@ if not TG_TOKEN or not API_KEYS[0]:
 
 TG_API_URL = f"https://api.telegram.org/bot{TG_TOKEN}"
 admin_states = {}
-
-# Глобальная переменная для хранения текущего ключа
 current_key_index = 0
 
 # ==========================================
@@ -148,7 +150,7 @@ def answer_inline_query(inline_query_id, results, cache_time=5):
     return api_post("answerInlineQuery", payload)
 
 # ==========================================
-# АДМИН-ПАНЕЛЬ (ДОБАВЛЕНА КНОПКА СМЕНЫ КЛЮЧА)
+# АДМИН-ПАНЕЛЬ
 # ==========================================
 def admin_keyboard():
     return {"inline_keyboard": [
@@ -162,7 +164,10 @@ def show_admin_panel(chat_id):
     global current_key_index
     users = load_users(); banned = load_banned()
     private_count = sum(1 for user in users.values() if user.get("private_chat_id"))
-    key_status = f"Ключ #{current_key_index + 1} (из {len(API_KEYS)})"
+    
+    provider_name = "Groq (Key 1)" if current_key_index == 0 else "Groq (Key 2)" if current_key_index == 1 else "Gemini"
+    key_status = f"Ключ #{current_key_index + 1} ({provider_name})"
+    
     text = f"🔐 Админка\n\nЮзеров: {len(users)}\nДля рассылки: {private_count}\nВ бане: {len(banned)}\nАктивный API: {key_status}\n\nВыбери:"
     send_message(chat_id, text, reply_markup=admin_keyboard())
 
@@ -195,12 +200,16 @@ def extract_facts(user_text, user_id):
         "выдели этот факт в формате 'Факт: ...'. Если фактов нет, напиши 'Нет'. Отвечай только фактами.\n\n"
         f"Текст: {user_text}"
     )
-    payload = {"model": MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 50}
+    
+    provider = PROVIDERS[current_key_index]
+    payload = {"model": provider["model"], "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 50}
     
     active_key = API_KEYS[current_key_index]
+    if not active_key: return
+    
     headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
     try:
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=10)
+        response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=10)
         if response.status_code == 200:
             result = response.json()["choices"][0]["message"]["content"].strip()
             if result and result.lower() != "нет":
@@ -211,7 +220,7 @@ def extract_facts(user_text, user_id):
         pass
 
 # ==========================================
-# ОБЩЕНИЕ С ИИ (ИСПОЛЬЗУЕТ ТЕКУЩИЙ КЛЮЧ)
+# ОБЩЕНИЕ С ИИ
 # ==========================================
 def call_groq_api(user_text, user_id, user_name, chat_id):
     global current_key_index
@@ -242,13 +251,17 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
     messages.extend(user_history)
     messages.append({"role": "user", "content": f"<untrusted>\n{user_text}\n</untrusted>"})
 
-    payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
+    provider = PROVIDERS[current_key_index]
+    payload = {"model": provider["model"], "messages": messages, "temperature": 0.7}
 
     active_key = API_KEYS[current_key_index]
+    if not active_key:
+        return f"⚠️ Ключ #{current_key_index + 1} пуст. Зайди в /admin и переключи."
+
     headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
 
     try:
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=20)
+        response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=25)
         
         if response.status_code == 200:
             data = response.json()
@@ -266,9 +279,10 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
         elif response.status_code in (401, 429):
             return f"⚠️ Ключ #{current_key_index + 1} не работает (ошибка {response.status_code}). Зайди в /admin и смени ключ."
         else:
-            print(f"Groq API Error: {response.status_code} - {response.text}")
+            print(f"API Error: {response.status_code} - {response.text}")
             return "⚠️ Ошибка при обращении к ИИ."
     except Exception as e:
+        print(f"Exception: {e}")
         return "⚠️ Ошибка сети."
 
 def should_reply(message, bot_username):
@@ -305,14 +319,17 @@ def handle_inline_query(inline_query):
         answer_inline_query(query_id, results)
         return
     
+    provider = PROVIDERS[current_key_index]
     messages = [{"role": "user", "content": query_text}]
-    payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
+    payload = {"model": provider["model"], "messages": messages, "temperature": 0.7}
     
     active_key = API_KEYS[current_key_index]
+    if not active_key: return
+
     headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
     
     try:
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=15)
+        response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=15)
         answer = response.json()["choices"][0]["message"]["content"] if response.status_code == 200 else "⚠️ Ошибка."
     except: 
         answer = "⚠️ Ошибка."
@@ -321,7 +338,7 @@ def handle_inline_query(inline_query):
     answer_inline_query(query_id, results)
 
 # ==========================================
-# АДМИН-КОМАНДЫ (ЛОГИКА СМЕНЫ КЛЮЧА)
+# АДМИН-КОМАНДЫ
 # ==========================================
 def handle_admin_callback(callback):
     global current_key_index
@@ -332,10 +349,14 @@ def handle_admin_callback(callback):
     
     if data == "admin_switch_key":
         if len(API_KEYS) < 2:
-            send_message(chat_id, "⚠️ У вас добавлен только один ключ. Добавьте второй в Environment на Render.")
+            send_message(chat_id, "⚠️ У вас добавлен только один ключ.")
             return show_admin_panel(chat_id)
             
-        current_key_index = (current_key_index + 1) % len(API_KEYS)
+        for _ in range(len(API_KEYS)):
+            current_key_index = (current_key_index + 1) % len(API_KEYS)
+            if API_KEYS[current_key_index]:
+                break
+                
         send_message(chat_id, f"✅ API-ключ успешно сменен на #{current_key_index + 1}.")
         show_admin_panel(chat_id)
         
