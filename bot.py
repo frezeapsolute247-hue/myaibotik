@@ -18,11 +18,11 @@ BASE_URL = os.getenv("BASE_URL", "https://api.groq.com/openai/v1")
 MODEL = "openai/gpt-oss-20b"
 
 # ==========================================
-# ЗДЕСЬ МЕНЯЕШЬ API_ID И API_HASH
-# Получить новые: https://my.telegram.org -> API development tools
+# API_ID и API_HASH для Telethon (реакции)
+# Получить: https://my.telegram.org -> API development tools
 # ==========================================
-API_ID = int(os.getenv("TG_API_ID", "31124227"))  # <-- Замени в Render Environment
-API_HASH = os.getenv("TG_API_HASH", "439abf786f2ae0c75e25b5deb9e5a14c") # <-- Замени в Render Environment
+API_ID = int(os.getenv("TG_API_ID", "31124227")) 
+API_HASH = os.getenv("TG_API_HASH", "439abf786f2ae0c75e25b5deb9e5a14c") 
 # ==========================================
 
 ADMIN_ID = 755116310
@@ -521,31 +521,28 @@ def process_update(update, bot_username):
         if not should_reply(msg, bot_username):
             return
 
-        try:
-            asyncio.run_coroutine_threadsafe(
-                set_reaction(chat_id, message_id, "👀"),
-                telethon_client.loop
-            )
-        except Exception:
-            pass
+        # 1. Ставим реакцию 👀 (глазики), что бот увидел сообщение
+        if telethon_client:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    set_reaction(chat_id, message_id, "👀"),
+                    telethon_client.loop
+                )
+            except Exception as e:
+                print(f"Ошибка реакции 👀: {e}")
 
-        try:
-            asyncio.run_coroutine_threadsafe(
-                set_reaction(chat_id, message_id, "🤔"),
-                telethon_client.loop
-            )
-        except Exception:
-            pass
-
+        # 2. Обрабатываем сообщение (генерируем ответ)
         process_message(msg, bot_username)
 
-        try:
-            asyncio.run_coroutine_threadsafe(
-                set_reaction(chat_id, message_id, "🔥"),
-                telethon_client.loop
-            )
-        except Exception:
-            pass
+        # 3. Ставим реакцию 🔥 (готово) после ответа
+        if telethon_client:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    set_reaction(chat_id, message_id, "🔥"),
+                    telethon_client.loop
+                )
+            except Exception as e:
+                print(f"Ошибка реакции 🔥: {e}")
 
 def main():
     global telethon_client
