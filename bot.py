@@ -24,7 +24,7 @@ API_KEYS = [
 PROVIDERS = [
     {"url": "https://api.groq.com/openai/v1", "model": "openai/gpt-oss-20b"},
     {"url": "https://api.groq.com/openai/v1", "model": "llama-3.1-8b-instant"},
-    {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.5-flash-lite"}
+    {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash"} # <-- Заменили здесь
 ]
 # ==========================================
 
