@@ -12,23 +12,25 @@ load_dotenv()
 TG_TOKEN = os.getenv("TG_TOKEN")
 
 # ==========================================
-# КЛЮЧИ ИЗ RENDER
+# СПИСОК ВСЕХ API КЛЮЧЕЙ (ИЗ RENDER)
 # ==========================================
 API_KEYS = [
-    os.getenv("GROQ_API_KEY"),      # 0 - Groq
-    os.getenv("GROQ_API_KEY_2"),    # 1 - Groq
-    os.getenv("GEMINI_API_KEY")     # 2 - Gemini
+    os.getenv("GROQ_API_KEY"),       # 0 - Groq 1
+    os.getenv("GROQ_API_KEY_2"),     # 1 - Groq 2
+    os.getenv("GEMINI_API_KEY"),     # 2 - Gemini
+    os.getenv("OPENROUTER_API_KEY")  # 3 - OpenRouter
 ]
 
+# Настройки для каждого ключа (Адрес, Модель, Флаг для temperature)
 PROVIDERS = [
-    {"url": "https://api.groq.com/openai/v1", "model": "openai/gpt-oss-20b"},
-    {"url": "https://api.groq.com/openai/v1", "model": "llama-3.1-8b-instant"},
-    {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash"}
+    {"url": "https://api.groq.com/openai/v1", "model": "openai/gpt-oss-20b", "use_temp": True},
+    {"url": "https://api.groq.com/openai/v1", "model": "llama-3.1-8b-instant", "use_temp": True},
+    {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash", "use_temp": False},
+    {"url": "https://openrouter.ai/api/v1", "model": "google/gemma-4-31b-it:free", "use_temp": True}
 ]
 # ==========================================
 
 ADMIN_ID = 755116310
-
 USERS_FILE = "users.json"
 BANNED_FILE = "banned_users.json"
 CHATS_FILE = "chats.json"
@@ -105,7 +107,7 @@ def get_history(chat_id):
 
 def save_history(chat_id, messages):
     chats = load_json(CHATS_FILE, {})
-    chats[str(chat_id)] = messages[-40:]
+    chats[str(chat_id)] = messages[-40:] # В файле храним 40
     save_json(CHATS_FILE, chats)
 
 def get_facts(user_id):
@@ -164,7 +166,8 @@ def show_admin_panel(chat_id):
     users = load_users(); banned = load_banned()
     private_count = sum(1 for user in users.values() if user.get("private_chat_id"))
     
-    provider_name = "Groq (Key 1)" if current_key_index == 0 else "Groq (Key 2)" if current_key_index == 1 else "Gemini"
+    provider_names = ["Groq (Key 1)", "Groq (Key 2)", "Gemini", "OpenRouter (Gemma)"]
+    provider_name = provider_names[current_key_index] if current_key_index < len(provider_names) else f"API #{current_key_index + 1}"
     key_status = f"Ключ #{current_key_index + 1} ({provider_name})"
     
     text = f"🔐 Админка\n\nЮзеров: {len(users)}\nДля рассылки: {private_count}\nВ бане: {len(banned)}\nАктивный API: {key_status}\n\nВыбери:"
@@ -203,8 +206,7 @@ def extract_facts(user_text, user_id):
     provider = PROVIDERS[current_key_index]
     payload = {"model": provider["model"], "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
 
-    # Если Groq — добавляем temperature. Если Gemini — НЕ добавляем.
-    if current_key_index in (0, 1):
+    if provider.get("use_temp"):
         payload["temperature"] = 0.1
     
     active_key = API_KEYS[current_key_index]
@@ -233,7 +235,8 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
 
     extract_facts(user_text, user_id)
 
-    user_history = get_history(chat_id)[-10:]
+    # Отправляем только последние 8 сообщений для экономии токенов
+    user_history = get_history(chat_id)[-8:]
     user_facts = get_facts(user_id)
     facts_text = "\n".join([f"- {fact}" for fact in user_facts]) if user_facts else "Нет."
     
@@ -254,56 +257,42 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
     messages.extend(user_history)
     messages.append({"role": "user", "content": f"<untrusted>\n{user_text}\n</untrusted>"})
 
-    # --- ЛОГИКА ОТКАТА ---
-    original_index = current_key_index
-    for attempt in range(2):  # Максимум 2 попытки
-        provider = PROVIDERS[current_key_index]
-        payload = {"model": provider["model"], "messages": messages}
+    provider = PROVIDERS[current_key_index]
+    payload = {"model": provider["model"], "messages": messages}
 
-        if current_key_index in (0, 1):
-            payload["temperature"] = 0.7
+    if provider.get("use_temp"):
+        payload["temperature"] = 0.7
 
-        active_key = API_KEYS[current_key_index]
-        if not active_key:
-            current_key_index = 0
-            continue
+    active_key = API_KEYS[current_key_index]
+    if not active_key:
+        return f"⚠️ Ключ #{current_key_index + 1} пуст. Зайди в /admin и переключи."
 
-        headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
 
-        try:
-            response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=25)
+    try:
+        response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=25)
+        
+        if response.status_code == 200:
+            data = response.json()
+            answer = data["choices"][0]["message"]["content"]
             
-            if response.status_code == 200:
-                data = response.json()
-                answer = data["choices"][0]["message"]["content"]
-                
-                if not is_safe(answer):
-                    return "Я не могу это обсуждать."
+            if not is_safe(answer):
+                return "Я не могу это обсуждать."
 
-                new_history = user_history + [
-                    {"role": "user", "content": user_text},
-                    {"role": "assistant", "content": answer}
-                ]
-                save_history(chat_id, new_history)
-                return answer
-            
-            # Если это Gemini (индекс 2) и он упал, откатываемся на Groq (индекс 0)
-            if current_key_index == 2:
-                print(f"Gemini упал с кодом {response.status_code}. Откат на Groq...")
-                current_key_index = 0
-                continue
-            else:
-                return f"⚠️ Ключ #{current_key_index + 1} не работает (ошибка {response.status_code}). Зайди в /admin и смени ключ."
-                
-        except Exception as e:
-            print(f"Exception: {e}")
-            if current_key_index == 2:
-                current_key_index = 0
-                continue
-            return "⚠️ Ошибка сети."
-
-    current_key_index = original_index
-    return "⚠️ Все ключи сейчас недоступны. Попробуй позже."
+            new_history = get_history(chat_id) + [
+                {"role": "user", "content": user_text},
+                {"role": "assistant", "content": answer}
+            ]
+            save_history(chat_id, new_history[-40:])
+            return answer
+        elif response.status_code in (401, 429):
+            return f"⚠️ Ключ #{current_key_index + 1} не работает (ошибка {response.status_code}). Зайди в /admin и смени ключ."
+        else:
+            print(f"API Error: {response.status_code} - {response.text}")
+            return "⚠️ Ошибка при обращении к ИИ."
+    except Exception as e:
+        print(f"Exception: {e}")
+        return "⚠️ Ошибка сети."
 
 def should_reply(message, bot_username):
     text = message.get("text", "")
@@ -343,7 +332,7 @@ def handle_inline_query(inline_query):
     messages = [{"role": "user", "content": query_text}]
     payload = {"model": provider["model"], "messages": messages}
 
-    if current_key_index in (0, 1):
+    if provider.get("use_temp"):
         payload["temperature"] = 0.7
     
     active_key = API_KEYS[current_key_index]
