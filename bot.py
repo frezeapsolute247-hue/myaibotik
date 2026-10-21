@@ -4,12 +4,20 @@ import json
 import requests
 import re
 import asyncio
+import io
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import SendReactionRequest
+
+# Импорт библиотеки Pexafy для поиска картинок
+try:
+    from pexafy import Client as PexafyClient
+    PEXAFY_AVAILABLE = True
+except ImportError:
+    PEXAFY_AVAILABLE = False
 
 load_dotenv()
 
@@ -23,6 +31,12 @@ MODEL = "openai/gpt-oss-20b"
 # ==========================================
 API_ID = int(os.getenv("TG_API_ID", "31124227")) 
 API_HASH = os.getenv("TG_API_HASH", "439abf786f2ae0c75e25b5deb9e5a14c") 
+
+# ==========================================
+# Pexafy API (поиск картинок)
+# ЗАМЕНИ ЭТОТ КЛЮЧ НА НОВЫЙ, КОГДА СГЕНЕРИРУЕШЬ
+# ==========================================
+PEXAFY_API_KEY = "pexafy_api_R_k38Coq3RFVPsJ2koF5ZxXDEnEZi38umXEIw9lfcQ8"
 # ==========================================
 
 ADMIN_ID = 755116310
@@ -117,6 +131,26 @@ def api_post(method, payload, timeout=15):
         print(f"Ошибка Telegram API ({method}): {error}")
         return None
 
+# --- ФУНКЦИЯ ДЛЯ ОТПРАВКИ ФОТО ---
+def send_photo(chat_id, photo_url, caption=None, reply_to_message_id=None):
+    try:
+        resp = requests.get(photo_url, timeout=15)
+        resp.raise_for_status()
+        
+        files = {'photo': ('photo.jpg', io.BytesIO(resp.content), 'image/jpeg')}
+        payload = {'chat_id': chat_id}
+        if caption:
+            payload['caption'] = caption
+        if reply_to_message_id:
+            payload['reply_to_message_id'] = reply_to_message_id
+            
+        response = requests.post(f"{TG_API_URL}/sendPhoto", data=payload, files=files, timeout=30)
+        return response.json()
+    except Exception as e:
+        print(f"Ошибка отправки фото: {e}")
+        return None
+# -------------------------------------------------------
+
 def send_message(chat_id, text, reply_to_message_id=None, reply_markup=None):
     payload = {"chat_id": chat_id, "text": str(text)}
     if reply_to_message_id:
@@ -204,9 +238,9 @@ def call_groq_api(prompt, user_id, user_name):
     system_prompt = (
         "Ты — Serp AI, обычный пацан-бот в Telegram. Твое имя — Serp. "
         "Общайся с пользователем как друг. "
-        "Если тебя просят написать бессмыслицу или дичь (например 'ратку'), которую ты не понимаешь — отвечай коротко, в одну строчку (например: 'Не, эту дичь я писать не буду' или 'Я такое не пишу'). "
-        "Если тебя оскорбляют — отвечай дерзко, ставь на место, но БЕЗ МАТОВ и без длинных нотаций. "
-        "На нормальные вопросы отвечай по делу. Если нужен развернутый ответ — дай его, но без воды и философских монологов. "
+        "Если тебя просят написать бессмыслицу или дичь — отвечай коротко, в одну строчку. "
+        "Если тебя оскорбляют — отвечай дерзко, ставь на место, но БЕЗ МАТОВ. "
+        "На нормальные вопросы отвечай по делу. "
         "Ты помнишь контекст диалога, но не пересказывай его.\n\n"
         "ПРАВИЛА:\n"
         "1. Никаких наркотиков, оружия, насилия, взлома.\n"
@@ -450,7 +484,7 @@ def process_message(message, bot_username):
             "Я Serp AI. 🤖\n\n"
             "Че надо? Задавай вопросы, я помню контекст. "
             "В группах зови по имени (Serp, Серп) или пиши `@имя_бота`.\n\n"
-            "Я не обсуждаю незаконные темы."
+            "Я не обсуждаю незаконные темы. Могу скинуть фотку, если попросишь."
         )
         send_message(chat_id, welcome, reply_to_message_id=message.get("message_id"))
         return
@@ -481,6 +515,41 @@ def process_message(message, bot_username):
         if not clean_text:
             clean_text = "Привет"
             
+        # --- ЛОГИКА ПОИСКА КАРТИНОК ---
+        if any(word in clean_text for word in ["фото", "картинк", "скинь", "пришли", "покажи"]):
+            if not PEXAFY_AVAILABLE:
+                send_message(chat_id, "Библиотека для картинок не установлена (нет pexafy-python).", reply_to_message_id=message.get("message_id"))
+                return
+                
+            send_chat_action(chat_id, "upload_photo")
+            
+            # Убираем слова-триггеры, чтобы остался только запрос
+            search_query = clean_text
+            for trigger in ["фото", "картинк", "скинь", "пришли", "покажи", "мне", "пожалуйста"]:
+                search_query = search_query.replace(trigger, "")
+            search_query = search_query.strip()
+            
+            if not search_query:
+                search_query = "nature"
+
+            try:
+                # Ищем картинку через Pexafy
+                client = PexafyClient(api_key=PEXAFY_API_KEY)
+                results = client.search_photos(search_query, per_page=1)
+                
+                if results and results.get("results"):
+                    photo_url = results["results"][0]["src"]["large"]
+                    send_photo(chat_id, photo_url, caption=f"Вот что нашел по запросу: {search_query}", reply_to_message_id=message.get("message_id"))
+                    return
+                else:
+                    send_message(chat_id, f"Не нашел картинок по запросу '{search_query}'.", reply_to_message_id=message.get("message_id"))
+                    return
+            except Exception as e:
+                print(f"Ошибка Pexafy: {e}")
+                send_message(chat_id, "Ошибка при поиске картинки.", reply_to_message_id=message.get("message_id"))
+                return
+        # -------------------------------
+
         answer = call_groq_api(clean_text, user_id, user_name)
         send_message(chat_id, answer, reply_to_message_id=message.get("message_id"))
 
@@ -491,7 +560,6 @@ async def init_telethon():
     global telethon_client
     if API_ID and API_HASH:
         try:
-            # Используем StringSession, чтобы сессия не сбрасывалась на Render
             telethon_client = TelegramClient(StringSession(), API_ID, API_HASH)
             await telethon_client.start(bot_token=TG_TOKEN)
             print("✅ Telethon клиент запущен для реакций.")
@@ -511,39 +579,33 @@ async def set_reaction(chat_id, message_id, emoji):
             print(f"Ошибка реакции: {e}")
 
 def process_update(update, bot_username):
-    """Синхронная обертка для вызова асинхронных реакций."""
     if "message" in update:
         msg = update["message"]
         chat_id = msg["chat"]["id"]
         message_id = msg["message_id"]
-        user_id = msg["from"]["id"]
-        text = msg.get("text", "")
-
+        
         if not should_reply(msg, bot_username):
             return
 
-        # 1. Ставим реакцию 👀 (глазики)
         if telethon_client:
             try:
                 asyncio.run_coroutine_threadsafe(
                     set_reaction(chat_id, message_id, "👀"),
                     telethon_client.loop
                 )
-            except Exception as e:
-                print(f"Ошибка реакции 👀: {e}")
+            except Exception:
+                pass
 
-        # 2. Обрабатываем сообщение
         process_message(msg, bot_username)
 
-        # 3. Ставим реакцию 🔥 (готово)
         if telethon_client:
             try:
                 asyncio.run_coroutine_threadsafe(
                     set_reaction(chat_id, message_id, "🔥"),
                     telethon_client.loop
                 )
-            except Exception as e:
-                print(f"Ошибка реакции 🔥: {e}")
+            except Exception:
+                pass
 
 def main():
     global telethon_client
