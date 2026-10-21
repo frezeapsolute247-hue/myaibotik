@@ -9,22 +9,22 @@ from threading import Thread
 
 load_dotenv()
 
-# ==========================================
-# БОТ БЕРЕТ КЛЮЧИ ИЗ НАСТРОЕК RENDER (ENVIRONMENT)
-# ==========================================
 TG_TOKEN = os.getenv("TG_TOKEN")
 
+# ==========================================
+# КЛЮЧИ БЕРУТСЯ ИЗ НАСТРОЕК RENDER
+# ==========================================
 API_KEYS = [
-    os.getenv("GROQ_API_KEY"),      # Ключ 1 (Groq)
-    os.getenv("GROQ_API_KEY_2"),    # Ключ 2 (Groq)
-    os.getenv("GEMINI_API_KEY")     # Ключ 3 (Gemini)
+    os.getenv("GROQ_API_KEY"),       # Ключ 1 (Groq)
+    os.getenv("GROQ_API_KEY_2"),     # Ключ 2 (Groq)
+    os.getenv("OPENROUTER_API_KEY")  # Ключ 3 (OpenRouter)
 ]
 
 # Настройки для каждого ключа
 PROVIDERS = [
     {"url": "https://api.groq.com/openai/v1", "model": "openai/gpt-oss-20b"},
     {"url": "https://api.groq.com/openai/v1", "model": "llama-3.1-8b-instant"},
-    {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash"} # Актуальная модель
+    {"url": "https://openrouter.ai/api/v1", "model": "google/gemma-4-31b-it:free"}
 ]
 # ==========================================
 
@@ -165,7 +165,7 @@ def show_admin_panel(chat_id):
     users = load_users(); banned = load_banned()
     private_count = sum(1 for user in users.values() if user.get("private_chat_id"))
     
-    provider_name = "Groq (Key 1)" if current_key_index == 0 else "Groq (Key 2)" if current_key_index == 1 else "Gemini"
+    provider_name = "Groq (Key 1)" if current_key_index == 0 else "Groq (Key 2)" if current_key_index == 1 else "OpenRouter (Gemma)"
     key_status = f"Ключ #{current_key_index + 1} ({provider_name})"
     
     text = f"🔐 Админка\n\nЮзеров: {len(users)}\nДля рассылки: {private_count}\nВ бане: {len(banned)}\nАктивный API: {key_status}\n\nВыбери:"
@@ -204,8 +204,8 @@ def extract_facts(user_text, user_id):
     provider = PROVIDERS[current_key_index]
     payload = {"model": provider["model"], "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
 
-    # Если Groq — добавляем temperature. Если Gemini — НЕ добавляем.
-    if current_key_index in (0, 1):
+    # OpenRouter (Gemma) и Groq принимают temperature
+    if current_key_index in (0, 1, 2):
         payload["temperature"] = 0.1
     
     active_key = API_KEYS[current_key_index]
@@ -258,8 +258,7 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
     provider = PROVIDERS[current_key_index]
     payload = {"model": provider["model"], "messages": messages}
 
-    # Если Groq — добавляем temperature. Если Gemini — НЕ добавляем.
-    if current_key_index in (0, 1):
+    if current_key_index in (0, 1, 2):
         payload["temperature"] = 0.7
 
     active_key = API_KEYS[current_key_index]
@@ -331,7 +330,7 @@ def handle_inline_query(inline_query):
     messages = [{"role": "user", "content": query_text}]
     payload = {"model": provider["model"], "messages": messages}
 
-    if current_key_index in (0, 1):
+    if current_key_index in (0, 1, 2):
         payload["temperature"] = 0.7
     
     active_key = API_KEYS[current_key_index]
