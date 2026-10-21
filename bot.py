@@ -5,6 +5,7 @@ import requests
 import re
 import asyncio
 import io
+import base64
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
@@ -12,7 +13,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import SendReactionRequest
 
-# Импорт библиотеки Pexafy для поиска картинок
+# Импорт библиотеки Pexafy
 try:
     from pexafy import Client as PexafyClient
     PEXAFY_AVAILABLE = True
@@ -25,51 +26,40 @@ TG_TOKEN = os.getenv("TG_TOKEN")
 API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")
 BASE_URL = os.getenv("BASE_URL", "https://api.groq.com/openai/v1")
 MODEL = "openai/gpt-oss-20b"
+VISION_MODEL = "qwen/qwen3.8-27b"
 
-# ==========================================
-# API_ID и API_HASH для Telethon (реакции)
-# ==========================================
 API_ID = int(os.getenv("TG_API_ID", "31124227")) 
 API_HASH = os.getenv("TG_API_HASH", "439abf786f2ae0c75e25b5deb9e5a14c") 
 
-# ==========================================
-# Pexafy API (поиск картинок)
-# ЗАМЕНИ ЭТОТ КЛЮЧ НА НОВЫЙ, КОГДА СГЕНЕРИРУЕШЬ
-# ==========================================
+# Твой ключ Pexafy (замени на новый, если старый удалил)
 PEXAFY_API_KEY = "pexafy_api_R_k38Coq3RFVPsJ2koF5ZxXDEnEZi38umXEIw9lfcQ8"
-# ==========================================
 
 ADMIN_ID = 755116310
-
 USERS_FILE = "users.json"
 BANNED_FILE = "banned_users.json"
 HISTORY_FILE = "chat_history.json"
 
 if not TG_TOKEN or not API_KEY:
-    print("❌ Ошибка: проверьте .env — нужны TG_TOKEN и GROQ_API_KEY (или API_KEY).")
     raise SystemExit(1)
 
 TG_API_URL = f"https://api.telegram.org/bot{TG_TOKEN}"
-
 admin_states = {}
 
-# --- Веб-сервер для Render ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is alive and running!"
+    return "Bot is alive!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-# -------------------------------------------------------------
 
 def load_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as file:
             return json.load(file)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except:
         return default
 
 def save_json(path, data):
@@ -85,18 +75,13 @@ def load_users():
 def save_user(message):
     user = message.get("from", {})
     chat = message.get("chat", {})
-    if not user.get("id") or user.get("is_bot"):
-        return
-
+    if not user.get("id") or user.get("is_bot"): return
     users = load_users()
     user_id = str(user["id"])
     record = users.get(user_id, {})
-    
     record.update({
-        "user_id": user["id"],
-        "username": user.get("username"),
-        "first_name": user.get("first_name"),
-        "last_name": user.get("last_name"),
+        "user_id": user["id"], "username": user.get("username"),
+        "first_name": user.get("first_name"), "last_name": user.get("last_name"),
         "last_seen": int(time.time()),
     })
     if chat.get("type") == "private":
@@ -123,40 +108,27 @@ def save_history(user_id, messages):
 def api_post(method, payload, timeout=15):
     try:
         response = requests.post(f"{TG_API_URL}/{method}", json=payload, timeout=timeout)
-        result = response.json()
-        if not result.get("ok"):
-            print(f"Telegram API {method}: {result}")
-        return result
-    except (requests.exceptions.RequestException, ValueError) as error:
-        print(f"Ошибка Telegram API ({method}): {error}")
+        return response.json()
+    except:
         return None
 
-# --- ФУНКЦИЯ ДЛЯ ОТПРАВКИ ФОТО ---
 def send_photo(chat_id, photo_url, caption=None, reply_to_message_id=None):
     try:
         resp = requests.get(photo_url, timeout=15)
         resp.raise_for_status()
-        
         files = {'photo': ('photo.jpg', io.BytesIO(resp.content), 'image/jpeg')}
         payload = {'chat_id': chat_id}
-        if caption:
-            payload['caption'] = caption
-        if reply_to_message_id:
-            payload['reply_to_message_id'] = reply_to_message_id
-            
-        response = requests.post(f"{TG_API_URL}/sendPhoto", data=payload, files=files, timeout=30)
-        return response.json()
+        if caption: payload['caption'] = caption
+        if reply_to_message_id: payload['reply_to_message_id'] = reply_to_message_id
+        return requests.post(f"{TG_API_URL}/sendPhoto", data=payload, files=files, timeout=30).json()
     except Exception as e:
-        print(f"Ошибка отправки фото: {e}")
+        print(f"Ошибка фото: {e}")
         return None
-# -------------------------------------------------------
 
 def send_message(chat_id, text, reply_to_message_id=None, reply_markup=None):
     payload = {"chat_id": chat_id, "text": str(text)}
-    if reply_to_message_id:
-        payload["reply_to_message_id"] = reply_to_message_id
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
+    if reply_to_message_id: payload["reply_to_message_id"] = reply_to_message_id
+    if reply_markup: payload["reply_markup"] = reply_markup
     return api_post("sendMessage", payload)
 
 def send_chat_action(chat_id, action="typing"):
@@ -164,47 +136,22 @@ def send_chat_action(chat_id, action="typing"):
 
 def answer_callback(callback_query_id, text=""):
     payload = {"callback_query_id": callback_query_id}
-    if text:
-        payload["text"] = text
+    if text: payload["text"] = text
     api_post("answerCallbackQuery", payload, timeout=5)
 
 def answer_inline_query(inline_query_id, results, cache_time=5):
-    payload = {
-        "inline_query_id": inline_query_id,
-        "results": json.dumps(results),
-        "cache_time": cache_time
-    }
+    payload = {"inline_query_id": inline_query_id, "results": json.dumps(results), "cache_time": cache_time}
     return api_post("answerInlineQuery", payload)
 
 def admin_keyboard():
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "👥 Пользователи", "callback_data": "admin_users"},
-                {"text": "📢 Рассылка", "callback_data": "admin_broadcast"},
-            ],
-            [
-                {"text": "🔨 Бан по ID", "callback_data": "admin_ban"},
-                {"text": "🔓 Разбан по ID", "callback_data": "admin_unban"},
-            ],
-            [{"text": "❌ Отмена действия", "callback_data": "admin_cancel"}],
-        ]
-    }
+    return {"inline_keyboard": [[{"text": "👥 Пользователи", "callback_data": "admin_users"}, {"text": "📢 Рассылка", "callback_data": "admin_broadcast"}], [{"text": "🔨 Бан", "callback_data": "admin_ban"}, {"text": "🔓 Разбан", "callback_data": "admin_unban"}], [{"text": "❌ Отмена", "callback_data": "admin_cancel"}]]}
 
 def show_admin_panel(chat_id):
-    users = load_users()
-    banned = load_banned()
+    users = load_users(); banned = load_banned()
     private_count = sum(1 for user in users.values() if user.get("private_chat_id"))
-    text = (
-        "🔐 Панель администратора\n\n"
-        f"Всего сохранено пользователей: {len(users)}\n"
-        f"Доступны для личной рассылки: {private_count}\n"
-        f"Заблокировано: {len(banned)}\n\n"
-        "Выберите действие:"
-    )
+    text = f"🔐 Админка\n\nЮзеров: {len(users)}\nДля рассылки: {private_count}\nВ бане: {len(banned)}\n\nВыбери:"
     send_message(chat_id, text, reply_markup=admin_keyboard())
 
-# --- ФИЛЬТР БЕЗОПАСНОСТИ ---
 FORBIDDEN_ROOTS = [
     "меф", "геро", "кока", "амфе", "метам", "марих", "гашиш", "спайс", "соль", "заклад", "нарк", 
     "шишк", "бошк", "гидроп", "лсд", "экстаз", "мдма", "трамал", "кодеин", "опиум", "морфин",
@@ -222,13 +169,9 @@ def is_safe(text):
             if root in word:
                 return False
     return True
-# ---------------------------
 
-def call_groq_api(prompt, user_id, user_name):
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
+def call_groq_api(prompt, user_id, user_name, image_base64=None):
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     
     if not is_safe(prompt):
         return "Я с таким не работаю. Отвали."
@@ -237,43 +180,41 @@ def call_groq_api(prompt, user_id, user_name):
     
     system_prompt = (
         "Ты — Serp AI, обычный пацан-бот в Telegram. Твое имя — Serp. "
-        "Общайся с пользователем как друг. "
-        "Если тебя просят написать бессмыслицу или дичь — отвечай коротко, в одну строчку. "
-        "Если тебя оскорбляют — отвечай дерзко, ставь на место, но БЕЗ МАТОВ. "
-        "На нормальные вопросы отвечай по делу. "
-        "Ты помнишь контекст диалога, но не пересказывай его.\n\n"
-        "ПРАВИЛА:\n"
-        "1. Никаких наркотиков, оружия, насилия, взлома.\n"
-        "2. Никаких расшифровок кодов.\n"
-        "3. Отказ должен быть коротким и четким.\n\n"
+        "Общайся как друг, кратко и по делу. "
+        "Если на фото видно что-то незаконное (наркотики, оружие, насилие) — откажись это обсуждать. "
+        "Если тебя оскорбляют — отвечай дерзко, но без матов. "
         f"Собеседник: {user_name}."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(user_history)
-    messages.append({"role": "user", "content": prompt})
+    
+    if image_base64:
+        user_content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+        ]
+        messages.append({"role": "user", "content": user_content})
+        model_to_use = VISION_MODEL
+    else:
+        messages.append({"role": "user", "content": prompt})
+        model_to_use = MODEL
 
-    payload = {
-        "model": MODEL,
-        "messages": messages,
-        "temperature": 0.8
-    }
+    payload = {"model": model_to_use, "messages": messages, "temperature": 0.8}
 
     try:
         response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=30)
         
         if response.status_code != 200:
-            print(f"Groq API error: {response.status_code} - {response.text[:500]}")
+            print(f"Groq error: {response.text}")
             return "⚠️ Ошибка при обращении к ИИ."
 
         data = response.json()
         answer = data["choices"][0]["message"]["content"]
         
-        new_history = user_history + [
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": answer}
-        ]
-        save_history(user_id, new_history)
+        if not image_base64:
+            new_history = user_history + [{"role": "user", "content": prompt}, {"role": "assistant", "content": answer}]
+            save_history(user_id, new_history)
         
         return answer
     except Exception as error:
@@ -282,28 +223,18 @@ def call_groq_api(prompt, user_id, user_name):
 
 def should_reply(message, bot_username):
     text = message.get("text", "")
-    if not text:
-        return False
-    if message.get("chat", {}).get("type") == "private":
-        return True
+    if not text and not message.get("photo"): return False
+    if message.get("chat", {}).get("type") == "private": return True
 
-    text_lower = text.lower()
-    if "серп" in text_lower or "serp" in text_lower:
-        return True
-    if bot_username and f"@{bot_username.lower()}" in text_lower:
-        return True
-
-    reply_to = message.get("reply_to_message")
-    if reply_to and reply_to.get("from", {}).get("is_bot"):
-        return True
-
+    text_lower = text.lower() if text else ""
+    if "серп" in text_lower or "serp" in text_lower: return True
+    if bot_username and f"@{bot_username.lower()}" in text_lower: return True
+    if message.get("reply_to_message", {}).get("from", {}).get("is_bot"): return True
     return False
 
 def get_bot_info():
     result = api_post("getMe", {}, timeout=10)
-    if result and result.get("ok"):
-        return result["result"].get("username", "SerpAiRoBot")
-    return "SerpAiRoBot"
+    return result["result"].get("username", "SerpAiRoBot") if result and result.get("ok") else "SerpAiRoBot"
 
 def handle_inline_query(inline_query):
     query_id = inline_query.get("id")
@@ -311,40 +242,18 @@ def handle_inline_query(inline_query):
     user_name = inline_query.get("from", {}).get("first_name", "Пользователь")
 
     if not query_text:
-        results = [{
-            "type": "article",
-            "id": "1",
-            "title": "Напиши вопрос",
-            "description": "Введи текст после @бота, чтобы получить ответ",
-            "input_message_content": {"message_text": "Че надо?"}
-        }]
+        results = [{"type": "article", "id": "1", "title": "Напиши вопрос", "description": "Введи текст", "input_message_content": {"message_text": "Че надо?"}}]
         answer_inline_query(query_id, results)
         return
 
     if not is_safe(query_text):
-        results = [{
-            "type": "article",
-            "id": "1",
-            "title": "Отказано",
-            "description": "Я не работаю с таким",
-            "input_message_content": {"message_text": "Я не помогаю с криминалом."}
-        }]
+        results = [{"type": "article", "id": "1", "title": "Отказано", "description": "Нельзя", "input_message_content": {"message_text": "Я не помогаю с криминалом."}}]
         answer_inline_query(query_id, results)
         return
 
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
-    system_prompt = (
-        "Ты — Serp AI. Отвечай кратко (1-2 предложения), как друг, без длинных текстов. "
-        "Запрещено: наркотики, оружие, насилие, взлом и расшифровка кодов. "
-        f"Собеседник: {user_name}."
-    )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": query_text}
-    ]
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+    system_prompt = f"Ты — Serp AI. Отвечай кратко (1-2 предложения), как друг, без длинных текстов. Запрещено: наркотики, оружие, насилие, взлом и расшифровка кодов. Собеседник: {user_name}."
+    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": query_text}]
     payload = {"model": MODEL, "messages": messages, "temperature": 0.8}
     
     try:
@@ -357,13 +266,7 @@ def handle_inline_query(inline_query):
     except Exception:
         answer = "⚠️ Ошибка."
 
-    results = [{
-        "type": "article",
-        "id": "1",
-        "title": f"Ответ на: {query_text[:30]}...",
-        "description": answer[:100],
-        "input_message_content": {"message_text": answer}
-    }]
+    results = [{"type": "article", "id": "1", "title": f"Ответ на: {query_text[:30]}...", "description": answer[:100], "input_message_content": {"message_text": answer}}]
     answer_inline_query(query_id, results)
 
 def handle_admin_callback(callback):
@@ -383,12 +286,7 @@ def handle_admin_callback(callback):
     if data == "admin_users":
         users = load_users()
         banned = load_banned()
-        lines = [
-            f"Пользователей в базе: {len(users)}",
-            f"Заблокировано: {len(banned)}",
-            "",
-            "Последние сохранённые пользователи:",
-        ]
+        lines = [f"Пользователей в базе: {len(users)}", f"Заблокировано: {len(banned)}", "", "Последние сохранённые пользователи:"]
         for key, record in list(users.items())[-15:]:
             username = f"@{record['username']}" if record.get("username") else "без username"
             name = " ".join(part for part in [record.get("first_name"), record.get("last_name")] if part) or "Без имени"
@@ -428,8 +326,7 @@ def handle_admin_input(message, user_id, chat_id, text):
         sent, failed = 0, 0
         for record in users.values():
             target_chat_id = record.get("private_chat_id")
-            if not target_chat_id:
-                continue
+            if not target_chat_id: continue
             result = api_post("sendMessage", {"chat_id": target_chat_id, "text": text})
             if result and result.get("ok"): sent += 1
             else: failed += 1
@@ -515,15 +412,13 @@ def process_message(message, bot_username):
         if not clean_text:
             clean_text = "Привет"
             
-        # --- ЛОГИКА ПОИСКА КАРТИНОК ---
         if any(word in clean_text for word in ["фото", "картинк", "скинь", "пришли", "покажи"]):
             if not PEXAFY_AVAILABLE:
-                send_message(chat_id, "Библиотека для картинок не установлена (нет pexafy-python).", reply_to_message_id=message.get("message_id"))
+                send_message(chat_id, "Библиотека для картинок не установлена (нет pexafy).", reply_to_message_id=message.get("message_id"))
                 return
                 
             send_chat_action(chat_id, "upload_photo")
             
-            # Убираем слова-триггеры, чтобы остался только запрос
             search_query = clean_text
             for trigger in ["фото", "картинк", "скинь", "пришли", "покажи", "мне", "пожалуйста"]:
                 search_query = search_query.replace(trigger, "")
@@ -533,22 +428,24 @@ def process_message(message, bot_username):
                 search_query = "nature"
 
             try:
-                # Ищем картинку через Pexafy
-                client = PexafyClient(api_key=PEXAFY_API_KEY)
-                results = client.search_photos(search_query, per_page=1)
+                client = PexafyClient(PEXAFY_API_KEY)
+                results = list(client.search(search_query, per_page=1))
                 
-                if results and results.get("results"):
-                    photo_url = results["results"][0]["src"]["large"]
+                if results:
+                    photo_url = results[0].urls.large
                     send_photo(chat_id, photo_url, caption=f"Вот что нашел по запросу: {search_query}", reply_to_message_id=message.get("message_id"))
                     return
                 else:
-                    send_message(chat_id, f"Не нашел картинок по запросу '{search_query}'.", reply_to_message_id=message.get("message_id"))
+                    # ЗАПАСНОЙ ВАРИАНТ: если поиск пуст, шлем картинку с Википедии
+                    fallback_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Capsicum_annuum_seedling.jpg/1200px-Capsicum_annuum_seedling.jpg"
+                    send_photo(chat_id, fallback_url, caption=f"По запросу '{search_query}' ничего не нашел. Вот пример ростка перца.", reply_to_message_id=message.get("message_id"))
                     return
             except Exception as e:
                 print(f"Ошибка Pexafy: {e}")
-                send_message(chat_id, "Ошибка при поиске картинки.", reply_to_message_id=message.get("message_id"))
+                # Если ошибка API, тоже шлем запасную картинку
+                fallback_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Capsicum_annuum_seedling.jpg/1200px-Capsicum_annuum_seedling.jpg"
+                send_photo(chat_id, fallback_url, caption="Ошибка поиска. Вот пример картинки.", reply_to_message_id=message.get("message_id"))
                 return
-        # -------------------------------
 
         answer = call_groq_api(clean_text, user_id, user_name)
         send_message(chat_id, answer, reply_to_message_id=message.get("message_id"))
@@ -570,11 +467,7 @@ async def set_reaction(chat_id, message_id, emoji):
     if telethon_client:
         try:
             peer = chat_id
-            await telethon_client(SendReactionRequest(
-                peer=peer,
-                msg_id=message_id,
-                reaction=[emoji]
-            ))
+            await telethon_client(SendReactionRequest(peer=peer, msg_id=message_id, reaction=[emoji]))
         except Exception as e:
             print(f"Ошибка реакции: {e}")
 
@@ -589,23 +482,15 @@ def process_update(update, bot_username):
 
         if telethon_client:
             try:
-                asyncio.run_coroutine_threadsafe(
-                    set_reaction(chat_id, message_id, "👀"),
-                    telethon_client.loop
-                )
-            except Exception:
-                pass
+                asyncio.run_coroutine_threadsafe(set_reaction(chat_id, message_id, "👀"), telethon_client.loop)
+            except Exception: pass
 
         process_message(msg, bot_username)
 
         if telethon_client:
             try:
-                asyncio.run_coroutine_threadsafe(
-                    set_reaction(chat_id, message_id, "🔥"),
-                    telethon_client.loop
-                )
-            except Exception:
-                pass
+                asyncio.run_coroutine_threadsafe(set_reaction(chat_id, message_id, "🔥"), telethon_client.loop)
+            except Exception: pass
 
 def main():
     global telethon_client
@@ -621,11 +506,7 @@ def main():
 
     while True:
         try:
-            response = requests.get(
-                f"{TG_API_URL}/getUpdates",
-                params={"offset": offset, "timeout": 20},
-                timeout=25,
-            )
+            response = requests.get(f"{TG_API_URL}/getUpdates", params={"offset": offset, "timeout": 20}, timeout=25)
             data = response.json()
             if not data.get("ok"):
                 time.sleep(2)
