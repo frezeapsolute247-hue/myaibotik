@@ -13,6 +13,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import SendReactionRequest
 
+# Импорт библиотеки Pexafy
 try:
     from pexafy import Client as PexafyClient
     PEXAFY_AVAILABLE = True
@@ -30,6 +31,7 @@ VISION_MODEL = "qwen/qwen3.8-27b"
 API_ID = int(os.getenv("TG_API_ID", "31124227")) 
 API_HASH = os.getenv("TG_API_HASH", "439abf786f2ae0c75e25b5deb9e5a14c") 
 
+# Твой ключ Pexafy (замени на новый, если старый удалил)
 PEXAFY_API_KEY = "pexafy_api_R_k38Coq3RFVPsJ2koF5ZxXDEnEZi38umXEIw9lfcQ8"
 
 ADMIN_ID = 755116310
@@ -167,27 +169,6 @@ def is_safe(text):
             if root in word:
                 return False
     return True
-
-# --- НОВАЯ ФУНКЦИЯ ДЛЯ ПОНЯТИЯ СУТИ ЗАПРОСА ---
-def extract_search_query(user_text):
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    system_prompt = (
-        "Ты — помощник, который превращает просьбу пользователя в короткий поисковый запрос для фотостока. "
-        "Выдели из текста только суть (2-3 слова), что именно хочет увидеть человек. "
-        "Переведи это на английский язык. "
-        "Пример: 'нет мне нужно фото вот когда ростки выросли маленькие скинь фото' -> 'pepper seedlings'. "
-        "Ответь ТОЛЬКО поисковым запросом, без кавычек и лишних слов."
-    )
-    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}]
-    payload = {"model": MODEL, "messages": messages, "temperature": 0.1, "max_tokens": 20}
-    try:
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=15)
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"].strip()
-    except:
-        pass
-    return "nature"
-# ------------------------------------------------
 
 def call_groq_api(prompt, user_id, user_name, image_base64=None):
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
@@ -438,9 +419,13 @@ def process_message(message, bot_username):
                 
             send_chat_action(chat_id, "upload_photo")
             
-            # ИСПОЛЬЗУЕМ НЕЙРОСЕТЬ ДЛЯ ПОНИМАНИЯ СУТИ ЗАПРОСА
-            search_query = extract_search_query(clean_text)
-            print(f"Поисковый запрос: {search_query}")
+            search_query = clean_text
+            for trigger in ["фото", "картинк", "скинь", "пришли", "покажи", "мне", "пожалуйста"]:
+                search_query = search_query.replace(trigger, "")
+            search_query = search_query.strip()
+            
+            if not search_query:
+                search_query = "nature"
 
             try:
                 client = PexafyClient(PEXAFY_API_KEY)
@@ -448,14 +433,16 @@ def process_message(message, bot_username):
                 
                 if results:
                     photo_url = results[0].urls.large
-                    send_photo(chat_id, photo_url, caption="Вот твое фото.", reply_to_message_id=message.get("message_id"))
+                    send_photo(chat_id, photo_url, caption=f"Вот что нашел по запросу: {search_query}", reply_to_message_id=message.get("message_id"))
                     return
                 else:
+                    # ЗАПАСНОЙ ВАРИАНТ: если поиск пуст, шлем картинку с Википедии
                     fallback_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Capsicum_annuum_seedling.jpg/1200px-Capsicum_annuum_seedling.jpg"
-                    send_photo(chat_id, fallback_url, caption="По твоему запросу ничего не нашел. Вот пример.", reply_to_message_id=message.get("message_id"))
+                    send_photo(chat_id, fallback_url, caption=f"По запросу '{search_query}' ничего не нашел. Вот пример ростка перца.", reply_to_message_id=message.get("message_id"))
                     return
             except Exception as e:
                 print(f"Ошибка Pexafy: {e}")
+                # Если ошибка API, тоже шлем запасную картинку
                 fallback_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Capsicum_annuum_seedling.jpg/1200px-Capsicum_annuum_seedling.jpg"
                 send_photo(chat_id, fallback_url, caption="Ошибка поиска. Вот пример картинки.", reply_to_message_id=message.get("message_id"))
                 return
