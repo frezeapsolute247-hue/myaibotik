@@ -13,23 +13,21 @@ load_dotenv()
 TG_TOKEN = os.getenv("TG_TOKEN")
 API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")
 BASE_URL = os.getenv("BASE_URL", "https://api.groq.com/openai/v1")
-MODEL = "llama-3.1-8b-instant" # Используем стабильную модель
+# Возвращаем ту самую модель, которая работала
+MODEL = "openai/gpt-oss-20b"
 
 ADMIN_ID = 755116310
 
-# Файлы для хранения данных
 USERS_FILE = "users.json"
 BANNED_FILE = "banned_users.json"
 CHATS_FILE = "chats.json"
 FACTS_FILE = "facts.json"
 
 if not TG_TOKEN or not API_KEY:
-    print("❌ Ошибка: проверьте .env — нужны TG_TOKEN и GROQ_API_KEY (или API_KEY).")
+    print("❌ Ошибка: проверьте .env")
     raise SystemExit(1)
 
 TG_API_URL = f"https://api.telegram.org/bot{TG_TOKEN}"
-
-# Глобальные состояния для админки
 admin_states = {}
 
 # ==========================================
@@ -39,20 +37,20 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is alive and running!"
+    return "Bot is alive!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# ФУНКЦИИ РАБОТЫ С ФАЙЛАМИ (ПАМЯТЬ)
+# ФУНКЦИИ РАБОТЫ С ФАЙЛАМИ
 # ==========================================
 def load_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as file:
             return json.load(file)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except:
         return default
 
 def save_json(path, data):
@@ -69,7 +67,6 @@ def save_user(message):
     user = message.get("from", {})
     chat = message.get("chat", {})
     if not user.get("id") or user.get("is_bot"): return
-    
     users = load_users()
     user_id = str(user["id"])
     record = users.get(user_id, {})
@@ -96,7 +93,7 @@ def get_history(chat_id):
 
 def save_history(chat_id, messages):
     chats = load_json(CHATS_FILE, {})
-    chats[str(chat_id)] = messages[-40:] # Храним последние 40 сообщений
+    chats[str(chat_id)] = messages[-40:] # Храним 40 сообщений для памяти
     save_json(CHATS_FILE, chats)
 
 def get_facts(user_id):
@@ -108,11 +105,11 @@ def save_fact(user_id, fact_text):
     user_facts = facts.get(str(user_id), [])
     if fact_text not in user_facts:
         user_facts.append(fact_text)
-    facts[str(user_id)] = user_facts[-10:] # Храним 10 фактов
+    facts[str(user_id)] = user_facts[-10:]
     save_json(FACTS_FILE, facts)
 
 # ==========================================
-# ФУНКЦИИ ОТПРАВКИ В TELEGRAM
+# ОТПРАВКА ЗАПРОСОВ В TELEGRAM
 # ==========================================
 def api_post(method, payload, timeout=15):
     try:
@@ -175,7 +172,7 @@ def is_safe(text):
     return True
 
 # ==========================================
-# АВТОМАТИЧЕСКАЯ ПАМЯТЬ (ВЫТАСКИВАНИЕ ФАКТОВ)
+# АВТОМАТИЧЕСКАЯ ПАМЯТЬ (ФАКТЫ)
 # ==========================================
 def extract_facts(user_text, user_id):
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
@@ -206,10 +203,8 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
     if not is_safe(user_text):
         return "Я не могу обсуждать незаконные темы."
 
-    # Сохраняем факты из сообщения
     extract_facts(user_text, user_id)
 
-    # Берем историю и факты
     user_history = get_history(chat_id)
     user_facts = get_facts(user_id)
     facts_text = "\n".join([f"- {fact}" for fact in user_facts]) if user_facts else "Нет."
@@ -217,7 +212,7 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
     is_creator = (user_id == ADMIN_ID)
     creator_status = "Твой создатель." if is_creator else "Обычный пользователь."
 
-    # Простой, но рабочий промпт
+    # Оставляем твой рабочий стиль
     system_prompt = (
         "Ты — Serp AI, умный и адекватный ИИ-ассистент в Telegram. Отвечай по-русски.\n"
         "Отвечай прямо на вопрос пользователя. Не пиши лишнего. "
@@ -244,7 +239,6 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
             if not is_safe(answer):
                 return "Я не могу это обсуждать."
 
-            # Сохраняем историю
             new_history = user_history + [
                 {"role": "user", "content": user_text},
                 {"role": "assistant", "content": answer}
@@ -258,26 +252,25 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
         return "⚠️ Ошибка."
 
 # ==========================================
-# ЛОГИКА РЕПЛАЕВ (ИСПРАВЛЕНО)
+# СТРОГИЕ РЕПЛАИ (ТОЛЬКО НА СВОИ)
 # ==========================================
 def should_reply(message, bot_username):
     text = message.get("text", "")
     if not text: return False
     
-    # 1. В личке отвечает всегда
+    # В личке отвечает на всё
     if message.get("chat", {}).get("type") == "private": return True
 
     text_lower = text.lower()
     
-    # 2. Отвечает на упоминание "серп", "serp" или @username
+    # Реагирует на имя или @username
     if "серп" in text_lower or "serp" in text_lower: return True
     if bot_username and f"@{bot_username.lower()}" in text_lower: return True
 
-    # 3. ЖЕСТКИЙ РЕПЛАЙ: отвечает ТОЛЬКО если реплай на СООБЩЕНИЕ ЭТОГО БОТА
+    # ЖЕСТКИЙ РЕПЛАЙ: Только если реплай на сообщение ЭТОГО бота
     reply_to = message.get("reply_to_message")
     if reply_to:
         sender = reply_to.get("from", {})
-        # Проверяем, что автор сообщения - бот и его юзернейм совпадает с нашим
         if sender.get("is_bot") and sender.get("username") == bot_username:
             return True
 
@@ -316,7 +309,7 @@ def handle_inline_query(inline_query):
     answer_inline_query(query_id, results)
 
 # ==========================================
-# ОБРАБОТКА АДМИН-КОМАНД
+# АДМИН-КОМАНДЫ
 # ==========================================
 def handle_admin_callback(callback):
     user = callback.get("from", {}); user_id = user.get("id"); callback_id = callback.get("id"); data = callback.get("data", ""); chat_id = callback.get("message", {}).get("chat", {}).get("id")
@@ -359,7 +352,7 @@ def handle_admin_input(message, user_id, chat_id, text):
     return False
 
 # ==========================================
-# ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ
+# ОБРАБОТКА СООБЩЕНИЙ
 # ==========================================
 def process_message(message, bot_username):
     if not message or "text" not in message or not message.get("from"): return
@@ -404,7 +397,7 @@ def process_message(message, bot_username):
         send_message(chat_id, answer, reply_to_message_id=message.get("message_id"))
 
 # ==========================================
-# ЗАПУСК
+# ЗАПУСК БОТА
 # ==========================================
 def main():
     Thread(target=run_web_server).start()
