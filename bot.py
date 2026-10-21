@@ -9,15 +9,15 @@ from threading import Thread
 
 load_dotenv()
 
-TG_TOKEN = os.getenv("8912451981:AAHwlmI7A8c_7ZUGQsIMP7b21PJVdq3Bwv0")
+TG_TOKEN = os.getenv("TG_TOKEN")
 
 # ==========================================
 # КЛЮЧИ БЕРУТСЯ ИЗ НАСТРОЕК RENDER
 # ==========================================
 API_KEYS = [
-    os.getenv("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"),      # Ключ 1 (Groq)
-    os.getenv("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"),    # Ключ 2 (Groq)
-    os.getenv("AQ.Ab8RN6LBOwhlcTPM6PAVyzNwwVEyFZrAwhIp3I1XHzzbq0q45g")     # Ключ 3 (Gemini)
+    os.getenv("GROQ_API_KEY"),      # Ключ 1 (Groq)
+    os.getenv("GROQ_API_KEY_2"),    # Ключ 2 (Groq)
+    os.getenv("GEMINI_API_KEY")     # Ключ 3 (Gemini)
 ]
 
 # Настройки для каждого ключа (модель Gemini актуальная)
