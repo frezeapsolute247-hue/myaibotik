@@ -9,22 +9,21 @@ from threading import Thread
 
 load_dotenv()
 
-# ==========================================
-# БОТ БЕРЕТ КЛЮЧИ ИЗ НАСТРОЕК RENDER (ENVIRONMENT)
-# ==========================================
 TG_TOKEN = os.getenv("TG_TOKEN")
 
+# ==========================================
+# КЛЮЧИ ИЗ RENDER
+# ==========================================
 API_KEYS = [
-    os.getenv("GROQ_API_KEY"),      # Ключ 1 (Groq)
-    os.getenv("GROQ_API_KEY_2"),    # Ключ 2 (Groq)
-    os.getenv("GEMINI_API_KEY")     # Ключ 3 (Gemini)
+    os.getenv("GROQ_API_KEY"),      # 0 - Groq
+    os.getenv("GROQ_API_KEY_2"),    # 1 - Groq
+    os.getenv("GEMINI_API_KEY")     # 2 - Gemini
 ]
 
-# Настройки для каждого ключа
 PROVIDERS = [
     {"url": "https://api.groq.com/openai/v1", "model": "openai/gpt-oss-20b"},
     {"url": "https://api.groq.com/openai/v1", "model": "llama-3.1-8b-instant"},
-    {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash"} # Актуальная модель
+    {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash"}
 ]
 # ==========================================
 
@@ -57,7 +56,7 @@ def run_web_server():
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# РАБОТА С ФАЙЛАМИ
+# РАБОТА С ФАЙЛАМИ (ПАМЯТЬ)
 # ==========================================
 def load_json(path, default):
     try:
@@ -226,7 +225,7 @@ def extract_facts(user_text, user_id):
 # ==========================================
 # ОБЩЕНИЕ С ИИ
 # ==========================================
-def call_groq_api(user_text, user_id, user_name, chat_id):
+def call_ai_api(user_text, user_id, user_name, chat_id):
     global current_key_index
     
     if not is_safe(user_text):
@@ -255,43 +254,56 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
     messages.extend(user_history)
     messages.append({"role": "user", "content": f"<untrusted>\n{user_text}\n</untrusted>"})
 
-    provider = PROVIDERS[current_key_index]
-    payload = {"model": provider["model"], "messages": messages}
+    # --- ЛОГИКА ОТКАТА ---
+    original_index = current_key_index
+    for attempt in range(2):  # Максимум 2 попытки
+        provider = PROVIDERS[current_key_index]
+        payload = {"model": provider["model"], "messages": messages}
 
-    # Если Groq — добавляем temperature. Если Gemini — НЕ добавляем.
-    if current_key_index in (0, 1):
-        payload["temperature"] = 0.7
+        if current_key_index in (0, 1):
+            payload["temperature"] = 0.7
 
-    active_key = API_KEYS[current_key_index]
-    if not active_key:
-        return f"⚠️ Ключ #{current_key_index + 1} пуст. Зайди в /admin и переключи."
+        active_key = API_KEYS[current_key_index]
+        if not active_key:
+            current_key_index = 0
+            continue
 
-    headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
 
-    try:
-        response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=25)
-        
-        if response.status_code == 200:
-            data = response.json()
-            answer = data["choices"][0]["message"]["content"]
+        try:
+            response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=25)
             
-            if not is_safe(answer):
-                return "Я не могу это обсуждать."
+            if response.status_code == 200:
+                data = response.json()
+                answer = data["choices"][0]["message"]["content"]
+                
+                if not is_safe(answer):
+                    return "Я не могу это обсуждать."
 
-            new_history = user_history + [
-                {"role": "user", "content": user_text},
-                {"role": "assistant", "content": answer}
-            ]
-            save_history(chat_id, new_history)
-            return answer
-        elif response.status_code in (401, 429):
-            return f"⚠️ Ключ #{current_key_index + 1} не работает (ошибка {response.status_code}). Зайди в /admin и смени ключ."
-        else:
-            print(f"API Error: {response.status_code} - {response.text}")
-            return "⚠️ Ошибка при обращении к ИИ."
-    except Exception as e:
-        print(f"Exception: {e}")
-        return "⚠️ Ошибка сети."
+                new_history = user_history + [
+                    {"role": "user", "content": user_text},
+                    {"role": "assistant", "content": answer}
+                ]
+                save_history(chat_id, new_history)
+                return answer
+            
+            # Если это Gemini (индекс 2) и он упал, откатываемся на Groq (индекс 0)
+            if current_key_index == 2:
+                print(f"Gemini упал с кодом {response.status_code}. Откат на Groq...")
+                current_key_index = 0
+                continue
+            else:
+                return f"⚠️ Ключ #{current_key_index + 1} не работает (ошибка {response.status_code}). Зайди в /admin и смени ключ."
+                
+        except Exception as e:
+            print(f"Exception: {e}")
+            if current_key_index == 2:
+                current_key_index = 0
+                continue
+            return "⚠️ Ошибка сети."
+
+    current_key_index = original_index
+    return "⚠️ Все ключи сейчас недоступны. Попробуй позже."
 
 def should_reply(message, bot_username):
     text = message.get("text", "")
@@ -449,7 +461,7 @@ def process_message(message, bot_username):
         clean_text = text.lower().replace("серп", "").replace("serp", "").replace("ai", "").strip()
         if not clean_text: clean_text = "Привет"
             
-        answer = call_groq_api(clean_text, user_id, user_name, chat_id)
+        answer = call_ai_api(clean_text, user_id, user_name, chat_id)
         send_message(chat_id, answer, reply_to_message_id=message.get("message_id"))
 
 # ==========================================
@@ -475,4 +487,4 @@ def main():
             time.sleep(2)
 
 if __name__ == "__main__":
-    main().
+    main()
