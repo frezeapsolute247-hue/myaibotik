@@ -3,9 +3,12 @@ import time
 import json
 import requests
 import re
+import asyncio
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
+from telethon import TelegramClient
+from telethon.tl.functions.messages import SendReactionRequest
 
 load_dotenv()
 
@@ -13,6 +16,14 @@ TG_TOKEN = os.getenv("TG_TOKEN")
 API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")
 BASE_URL = os.getenv("BASE_URL", "https://api.groq.com/openai/v1")
 MODEL = "openai/gpt-oss-20b"
+
+# ==========================================
+# ЗДЕСЬ МЕНЯЕШЬ API_ID И API_HASH
+# Получить новые: https://my.telegram.org -> API development tools
+# ==========================================
+API_ID = int(os.getenv("TG_API_ID", "31124227"))  # <-- Замени в Render Environment
+API_HASH = os.getenv("TG_API_HASH", "439abf786f2ae0c75e25b5deb9e5a14c") # <-- Замени в Render Environment
+# ==========================================
 
 ADMIN_ID = 755116310
 
@@ -473,8 +484,76 @@ def process_message(message, bot_username):
         answer = call_groq_api(clean_text, user_id, user_name)
         send_message(chat_id, answer, reply_to_message_id=message.get("message_id"))
 
+# --- КЛИЕНТ TELETHON ДЛЯ РЕАКЦИЙ ---
+telethon_client = None
+
+async def init_telethon():
+    global telethon_client
+    if API_ID and API_HASH:
+        try:
+            telethon_client = TelegramClient('bot_session', API_ID, API_HASH)
+            await telethon_client.start(bot_token=TG_TOKEN)
+            print("✅ Telethon клиент запущен для реакций.")
+        except Exception as e:
+            print(f"❌ Ошибка запуска Telethon: {e}")
+
+async def set_reaction(chat_id, message_id, emoji):
+    if telethon_client:
+        try:
+            peer = chat_id
+            await telethon_client(SendReactionRequest(
+                peer=peer,
+                msg_id=message_id,
+                reaction=[emoji]
+            ))
+        except Exception as e:
+            print(f"Ошибка реакции: {e}")
+
+def process_update(update, bot_username):
+    """Синхронная обертка для вызова асинхронных реакций."""
+    if "message" in update:
+        msg = update["message"]
+        chat_id = msg["chat"]["id"]
+        message_id = msg["message_id"]
+        user_id = msg["from"]["id"]
+        text = msg.get("text", "")
+
+        if not should_reply(msg, bot_username):
+            return
+
+        try:
+            asyncio.run_coroutine_threadsafe(
+                set_reaction(chat_id, message_id, "👀"),
+                telethon_client.loop
+            )
+        except Exception:
+            pass
+
+        try:
+            asyncio.run_coroutine_threadsafe(
+                set_reaction(chat_id, message_id, "🤔"),
+                telethon_client.loop
+            )
+        except Exception:
+            pass
+
+        process_message(msg, bot_username)
+
+        try:
+            asyncio.run_coroutine_threadsafe(
+                set_reaction(chat_id, message_id, "🔥"),
+                telethon_client.loop
+            )
+        except Exception:
+            pass
+
 def main():
+    global telethon_client
+    
     Thread(target=run_web_server).start()
+    
+    if API_ID and API_HASH:
+        asyncio.run(init_telethon())
     
     bot_username = get_bot_info()
     print(f"🚀 Бот @{bot_username} запущен. Модель: {MODEL}.")
@@ -497,7 +576,7 @@ def main():
                 if "callback_query" in update:
                     handle_admin_callback(update["callback_query"])
                 elif "message" in update:
-                    process_message(update["message"], bot_username)
+                    process_update(update, bot_username)
                 elif "inline_query" in update:
                     handle_inline_query(update["inline_query"])
 
