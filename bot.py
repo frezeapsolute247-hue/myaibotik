@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.tl.functions.messages import SendReactionRequest
 
 load_dotenv()
@@ -19,7 +20,6 @@ MODEL = "openai/gpt-oss-20b"
 
 # ==========================================
 # API_ID и API_HASH для Telethon (реакции)
-# Получить: https://my.telegram.org -> API development tools
 # ==========================================
 API_ID = int(os.getenv("TG_API_ID", "31124227")) 
 API_HASH = os.getenv("TG_API_HASH", "439abf786f2ae0c75e25b5deb9e5a14c") 
@@ -484,14 +484,15 @@ def process_message(message, bot_username):
         answer = call_groq_api(clean_text, user_id, user_name)
         send_message(chat_id, answer, reply_to_message_id=message.get("message_id"))
 
-# --- КЛИЕНТ TELETHON ДЛЯ РЕАКЦИЙ ---
+# --- КЛИЕНТ TELETHON ДЛЯ РЕАКЦИЙ (StringSession) ---
 telethon_client = None
 
 async def init_telethon():
     global telethon_client
     if API_ID and API_HASH:
         try:
-            telethon_client = TelegramClient('bot_session', API_ID, API_HASH)
+            # Используем StringSession, чтобы сессия не сбрасывалась на Render
+            telethon_client = TelegramClient(StringSession(), API_ID, API_HASH)
             await telethon_client.start(bot_token=TG_TOKEN)
             print("✅ Telethon клиент запущен для реакций.")
         except Exception as e:
@@ -521,7 +522,7 @@ def process_update(update, bot_username):
         if not should_reply(msg, bot_username):
             return
 
-        # 1. Ставим реакцию 👀 (глазики), что бот увидел сообщение
+        # 1. Ставим реакцию 👀 (глазики)
         if telethon_client:
             try:
                 asyncio.run_coroutine_threadsafe(
@@ -531,10 +532,10 @@ def process_update(update, bot_username):
             except Exception as e:
                 print(f"Ошибка реакции 👀: {e}")
 
-        # 2. Обрабатываем сообщение (генерируем ответ)
+        # 2. Обрабатываем сообщение
         process_message(msg, bot_username)
 
-        # 3. Ставим реакцию 🔥 (готово) после ответа
+        # 3. Ставим реакцию 🔥 (готово)
         if telethon_client:
             try:
                 asyncio.run_coroutine_threadsafe(
