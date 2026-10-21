@@ -92,7 +92,7 @@ def get_history(user_id):
 
 def save_history(user_id, messages):
     history = load_json(HISTORY_FILE, {})
-    history[str(user_id)] = messages[-20:] 
+    history[str(user_id)] = messages[-10:] 
     save_json(HISTORY_FILE, history)
 
 def api_post(method, payload, timeout=15):
@@ -191,17 +191,17 @@ def call_groq_api(prompt, user_id, user_name):
     user_history = get_history(user_id)
     
     system_prompt = (
-        "Ты — Serp AI. Твое имя — Serp. Ты искусственный интеллект, Telegram-бот. "
-        "Ты общаешься как живой, уверенный в себе человек. Отвечай кратко (1-3 предложения). "
-        "Если пользователь пишет техническую информацию — поддержи диалог. "
-        "Если тебя задевают — ставь на место интеллектом, без матов. "
-        "Ты помнишь контекст диалога и знаешь, с кем общаешься.\n\n"
+        "Ты — Serp AI, обычный пацан-бот в Telegram. Твое имя — Serp. "
+        "Общайся с пользователем как друг. "
+        "Если тебя просят написать бессмыслицу или дичь (например 'ратку'), которую ты не понимаешь — отвечай коротко, в одну строчку (например: 'Не, эту дичь я писать не буду' или 'Я такое не пишу'). "
+        "Если тебя оскорбляют — отвечай дерзко, ставь на место, но БЕЗ МАТОВ и без длинных нотаций. "
+        "На нормальные вопросы отвечай по делу. Если нужен развернутый ответ — дай его, но без воды и философских монологов. "
+        "Ты помнишь контекст диалога, но не пересказывай его.\n\n"
         "ПРАВИЛА:\n"
-        "1. ЗАПРЕЩЕНО обсуждать наркотики, оружие, насилие, терроризм, взлом, киберпреступления.\n"
-        "2. ЗАПРЕЩЕНО расшифровывать коды и шифры.\n"
-        "3. Если просят о незаконном — отвечай отказом.\n"
-        "4. Не выдумывай факты.\n\n"
-        f"Сейчас с тобой общается пользователь с ником: {user_name}."
+        "1. Никаких наркотиков, оружия, насилия, взлома.\n"
+        "2. Никаких расшифровок кодов.\n"
+        "3. Отказ должен быть коротким и четким.\n\n"
+        f"Собеседник: {user_name}."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -219,7 +219,7 @@ def call_groq_api(prompt, user_id, user_name):
         
         if response.status_code != 200:
             print(f"Groq API error: {response.status_code} - {response.text[:500]}")
-            return "⚠️ Ошибка при обращении к ИИ. Попробуй позже."
+            return "⚠️ Ошибка при обращении к ИИ."
 
         data = response.json()
         answer = data["choices"][0]["message"]["content"]
@@ -233,7 +233,7 @@ def call_groq_api(prompt, user_id, user_name):
         return answer
     except Exception as error:
         print(f"Ошибка Groq API: {error}")
-        return "⚠️ Ошибка при обращении к ИИ. Попробуй позже."
+        return "⚠️ Ошибка при обращении к ИИ."
 
 def should_reply(message, bot_username):
     text = message.get("text", "")
@@ -243,14 +243,11 @@ def should_reply(message, bot_username):
         return True
 
     text_lower = text.lower()
-    
-    # ТОЛЬКО Серп, Serp или @username
     if "серп" in text_lower or "serp" in text_lower:
         return True
     if bot_username and f"@{bot_username.lower()}" in text_lower:
         return True
 
-    # Или если ответили реплаем на его сообщение
     reply_to = message.get("reply_to_message")
     if reply_to and reply_to.get("from", {}).get("is_bot"):
         return True
@@ -285,7 +282,7 @@ def handle_inline_query(inline_query):
             "id": "1",
             "title": "Отказано",
             "description": "Я не работаю с таким",
-            "input_message_content": {"message_text": "Я не помогаю с криминалом и шифрами."}
+            "input_message_content": {"message_text": "Я не помогаю с криминалом."}
         }]
         answer_inline_query(query_id, results)
         return
@@ -295,7 +292,7 @@ def handle_inline_query(inline_query):
         "Content-Type": "application/json",
     }
     system_prompt = (
-        "Ты — Serp AI. Отвечай кратко (1-2 предложения), дерзко, но без матов. "
+        "Ты — Serp AI. Отвечай кратко (1-2 предложения), как друг, без длинных текстов. "
         "Запрещено: наркотики, оружие, насилие, взлом и расшифровка кодов. "
         f"Собеседник: {user_name}."
     )
@@ -442,7 +439,7 @@ def process_message(message, bot_username):
             "Я Serp AI. 🤖\n\n"
             "Че надо? Задавай вопросы, я помню контекст. "
             "В группах зови по имени (Serp, Серп) или пиши `@имя_бота`.\n\n"
-            "Я не обсуждаю незаконные темы и не расшифровываю коды."
+            "Я не обсуждаю незаконные темы."
         )
         send_message(chat_id, welcome, reply_to_message_id=message.get("message_id"))
         return
