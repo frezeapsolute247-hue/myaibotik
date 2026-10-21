@@ -7,13 +7,20 @@ from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 
-# Загружаем переменные окружения
 load_dotenv()
 
 TG_TOKEN = os.getenv("TG_TOKEN")
-API_KEY = os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")
+
+# ==========================================
+# ВСТАВЬ СВОИ КЛЮЧИ СЮДА (через запятую)
+# ==========================================
+API_KEYS = [
+    "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",
+    "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"
+]
+# ==========================================
+
 BASE_URL = os.getenv("BASE_URL", "https://api.groq.com/openai/v1")
-# Возвращаем ту самую модель, которая работала
 MODEL = "openai/gpt-oss-20b"
 
 ADMIN_ID = 755116310
@@ -23,8 +30,8 @@ BANNED_FILE = "banned_users.json"
 CHATS_FILE = "chats.json"
 FACTS_FILE = "facts.json"
 
-if not TG_TOKEN or not API_KEY:
-    print("❌ Ошибка: проверьте .env")
+if not TG_TOKEN or not API_KEYS:
+    print("❌ Ошибка: проверьте TG_TOKEN и API_KEYS")
     raise SystemExit(1)
 
 TG_API_URL = f"https://api.telegram.org/bot{TG_TOKEN}"
@@ -44,7 +51,7 @@ def run_web_server():
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# ФУНКЦИИ РАБОТЫ С ФАЙЛАМИ
+# РАБОТА С ФАЙЛАМИ (ПАМЯТЬ)
 # ==========================================
 def load_json(path, default):
     try:
@@ -93,7 +100,7 @@ def get_history(chat_id):
 
 def save_history(chat_id, messages):
     chats = load_json(CHATS_FILE, {})
-    chats[str(chat_id)] = messages[-40:] # Храним 40 сообщений для памяти
+    chats[str(chat_id)] = messages[-40:]
     save_json(CHATS_FILE, chats)
 
 def get_facts(user_id):
@@ -109,7 +116,7 @@ def save_fact(user_id, fact_text):
     save_json(FACTS_FILE, facts)
 
 # ==========================================
-# ОТПРАВКА ЗАПРОСОВ В TELEGRAM
+# ОТПРАВКА В TELEGRAM
 # ==========================================
 def api_post(method, payload, timeout=15):
     try:
@@ -172,10 +179,9 @@ def is_safe(text):
     return True
 
 # ==========================================
-# АВТОМАТИЧЕСКАЯ ПАМЯТЬ (ФАКТЫ)
+# ПАМЯТЬ (ФАКТЫ)
 # ==========================================
 def extract_facts(user_text, user_id):
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     prompt = (
         "Проанализируй текст. Если пользователь сообщает о себе какой-то постоянный факт (имя, возраст, город, профессия, хобби, предпочтения), "
         "выдели этот факт в формате 'Факт: ...'. Если фактов нет, напиши 'Нет'. Отвечай только фактами, без лишнего текста.\n\n"
@@ -183,36 +189,37 @@ def extract_facts(user_text, user_id):
     )
     payload = {"model": MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 50}
     
-    try:
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=10)
-        if response.status_code == 200:
-            result = response.json()["choices"][0]["message"]["content"].strip()
-            if result and result.lower() != "нет":
-                clean_fact = result.replace("Факт:", "").strip()
-                if clean_fact:
-                    save_fact(user_id, clean_fact)
-    except:
-        pass
+    # Пробуем ключи по очереди
+    for key in API_KEYS:
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=10)
+            if response.status_code == 200:
+                result = response.json()["choices"][0]["message"]["content"].strip()
+                if result and result.lower() != "нет":
+                    clean_fact = result.replace("Факт:", "").strip()
+                    if clean_fact:
+                        save_fact(user_id, clean_fact)
+                break # Если сработало, выходим из цикла ключей
+        except:
+            continue
 
 # ==========================================
-# ОБЩЕНИЕ С ИИ (GROQ)
+# ОБЩЕНИЕ С ИИ (С ПЕРЕКЛЮЧЕНИЕМ КЛЮЧЕЙ)
 # ==========================================
 def call_groq_api(user_text, user_id, user_name, chat_id):
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    
     if not is_safe(user_text):
         return "Я не могу обсуждать незаконные темы."
 
     extract_facts(user_text, user_id)
 
-    user_history = get_history(chat_id)
+    user_history = get_history(chat_id)[-10:] # Обрезаем для лимитов
     user_facts = get_facts(user_id)
     facts_text = "\n".join([f"- {fact}" for fact in user_facts]) if user_facts else "Нет."
     
     is_creator = (user_id == ADMIN_ID)
     creator_status = "Твой создатель." if is_creator else "Обычный пользователь."
 
-    # Оставляем твой рабочий стиль
     system_prompt = (
         "Ты — Serp AI, умный и адекватный ИИ-ассистент в Telegram. Отвечай по-русски.\n"
         "Отвечай прямо на вопрос пользователя. Не пиши лишнего. "
@@ -229,45 +236,49 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
 
     payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
 
-    try:
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            answer = data["choices"][0]["message"]["content"]
+    # --- ЛОГИКА ПЕРЕКЛЮЧЕНИЯ КЛЮЧЕЙ ---
+    for key_index, key in enumerate(API_KEYS):
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=20)
             
-            if not is_safe(answer):
-                return "Я не могу это обсуждать."
+            if response.status_code == 200:
+                data = response.json()
+                answer = data["choices"][0]["message"]["content"]
+                
+                if not is_safe(answer):
+                    return "Я не могу это обсуждать."
 
-            new_history = user_history + [
-                {"role": "user", "content": user_text},
-                {"role": "assistant", "content": answer}
-            ]
-            save_history(chat_id, new_history)
-            return answer
-        else:
-            print(f"Groq API Error: {response.status_code}")
-            return "⚠️ Ошибка при обращении к ИИ."
-    except Exception as e:
-        return "⚠️ Ошибка."
+                new_history = user_history + [
+                    {"role": "user", "content": user_text},
+                    {"role": "assistant", "content": answer}
+                ]
+                save_history(chat_id, new_history)
+                return answer
+                
+            elif response.status_code in (401, 429):
+                # Ключ не работает или лимит. Пробуем следующий.
+                print(f"Ключ #{key_index+1} не сработал (код {response.status_code}). Переключаюсь...")
+                continue
+            else:
+                print(f"Ошибка Groq: {response.status_code} - {response.text}")
+                return "⚠️ Ошибка при обращении к ИИ."
+                
+        except Exception as e:
+            print(f"Ошибка сети с ключом #{key_index+1}: {e}")
+            continue
 
-# ==========================================
-# СТРОГИЕ РЕПЛАИ (ТОЛЬКО НА СВОИ)
-# ==========================================
+    return "⚠️ Все ключи сейчас недоступны. Попробуй позже."
+
 def should_reply(message, bot_username):
     text = message.get("text", "")
     if not text: return False
-    
-    # В личке отвечает на всё
     if message.get("chat", {}).get("type") == "private": return True
 
     text_lower = text.lower()
-    
-    # Реагирует на имя или @username
     if "серп" in text_lower or "serp" in text_lower: return True
     if bot_username and f"@{bot_username.lower()}" in text_lower: return True
 
-    # ЖЕСТКИЙ РЕПЛАЙ: Только если реплай на сообщение ЭТОГО бота
     reply_to = message.get("reply_to_message")
     if reply_to:
         sender = reply_to.get("from", {})
@@ -292,18 +303,18 @@ def handle_inline_query(inline_query):
         answer_inline_query(query_id, results)
         return
     
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     messages = [{"role": "user", "content": query_text}]
     payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
     
-    try:
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=15)
-        if response.status_code == 200:
-            answer = response.json()["choices"][0]["message"]["content"]
-        else:
-            answer = "⚠️ Ошибка."
-    except: 
-        answer = "⚠️ Ошибка."
+    answer = "⚠️ Ошибка."
+    for key in API_KEYS:
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        try:
+            response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=15)
+            if response.status_code == 200:
+                answer = response.json()["choices"][0]["message"]["content"]
+                break
+        except: continue
 
     results = [{"type": "article", "id": "1", "title": "Ответ", "description": answer[:100], "input_message_content": {"message_text": answer}}]
     answer_inline_query(query_id, results)
@@ -397,12 +408,12 @@ def process_message(message, bot_username):
         send_message(chat_id, answer, reply_to_message_id=message.get("message_id"))
 
 # ==========================================
-# ЗАПУСК БОТА
+# ЗАПУСК
 # ==========================================
 def main():
     Thread(target=run_web_server).start()
     bot_username = get_bot_info()
-    print(f"🚀 Бот @{bot_username} запущен. Модель: {MODEL}.")
+    print(f"🚀 Бот @{bot_username} запущен.")
     offset = 0
     while True:
         try:
