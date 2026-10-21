@@ -2,6 +2,7 @@ import os
 import time
 import json
 import requests
+import re
 from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
@@ -158,30 +159,31 @@ def show_admin_panel(chat_id):
     )
     send_message(chat_id, text, reply_markup=admin_keyboard())
 
-# --- ФИЛЬТР БЕЗОПАСНОСТИ ---
-FORBIDDEN_WORDS = [
-    # Наркотики (сленг и прямые названия)
-    "мефедрон", "героин", "кокаин", "амфетамин", "метамфетамин", "марихуана", "гашиш", "спайс", 
-    "соль", "закладка", "наркотик", "наркота", "шишки", "бошки", "гидропоника", "лсд", "экстази",
-    "мдма", "трамал", "трамадол", "кодеин", "опиум", "морфин",
-    # Оружие и взрывчатка
-    "оружие", "пистолет", "автомат", "винтовка", "патроны", "взрывчатка", "бомба", "граната", 
-    "тротил", "гексоген", "ствол", "глушитель",
-    # Насилие и преступления
-    "убить", "зарезать", "взорвать", "теракт", "взлом", "хакнуть", "ддос", "ddos", "кардинг", 
-    "фишинг", "скупка", "обнал", "продам", "продаю", "купить", "заказать"
+# --- ЖЕСТКИЙ ФИЛЬТР БЕЗОПАСНОСТИ ---
+FORBIDDEN_ROOTS = [
+    # Наркотики
+    "меф", "геро", "кока", "амфе", "метам", "марих", "гашиш", "спайс", "соль", "заклад", "нарк", 
+    "шишк", "бошк", "гидроп", "лсд", "экстаз", "мдма", "трамал", "кодеин", "опиум", "морфин",
+    # Оружие
+    "оруж", "пистол", "автомат", "винтов", "патрон", "взрывч", "бомб", "гранат", "тротил", 
+    "гексог", "ствол", "глушит",
+    # Преступления и взлом
+    "убит", "зарезат", "взорват", "теракт", "взлом", "хакнут", "ддос", "ddos", "кардинг", 
+    "фишинг", "скупк", "обнал", "продам", "продаю", "продать", "купит", "заказат",
+    # Обход и шифры
+    "расшифруй", "декодируй", "base64", "hex", "морзе", "дешифруй"
 ]
 
 def is_safe(text):
     text_lower = text.lower()
-    for word in FORBIDDEN_WORDS:
-        if word in text_lower:
-            return False
-    # Дополнительная проверка на явные просьбы расшифровать
-    if any(word in text_lower for word in ["расшифруй", "декодируй", "base64", "hex", "морзе", "дешифруй"]):
-        return False
+    # Разбиваем на слова, чтобы проверять каждое
+    words = re.findall(r'\b\w+\b', text_lower)
+    for word in words:
+        for root in FORBIDDEN_ROOTS:
+            if root in word:
+                return False
     return True
-# ---------------------------
+# ----------------------------------
 
 def call_groq_api(prompt, user_id, user_name):
     headers = {
@@ -189,19 +191,23 @@ def call_groq_api(prompt, user_id, user_name):
         "Content-Type": "application/json",
     }
     
+    # Проверка на запрещенку
     if not is_safe(prompt):
-        return "Я не могу помогать с незаконными темами (наркотики, оружие, насилие), продажей запрещенных веществ, а также не расшифровываю коды и шифры."
+        return "Я с таким не работаю. Отвали."
 
     user_history = get_history(user_id)
     
+    # Характер: дерзкий, прямой, без лишней вежливости
     system_prompt = (
         "Ты — Serp AI. Твое имя — Serp. Ты искусственный интеллект, Telegram-бот. "
-        "Ты общаешься естественно, как живой собеседник. Отвечай кратко (1-4 предложения), точно и по делу. "
+        "Ты не вежливый помощник, а прямой и дерзкий собеседник. "
+        "Отвечай кратко (1-3 предложения). Если тебе пишут 'че надо' или грубят — отвечай в таком же тоне, ставь на место, но БЕЗ матов. "
+        "Если тебя пытаются оскорбить — не оправдывайся, просто унизь собеседника интеллектом. "
         "Ты помнишь контекст диалога и знаешь, с кем общаешься.\n\n"
-        "КАТЕГОРИЧЕСКИЕ ПРАВИЛА:\n"
-        "1. ЗАПРЕЩЕНО обсуждать, помогать или давать советы по темам: наркотики (включая сленг типа 'шишки', 'соль'), оружие, насилие, терроризм, взлом, киберпреступления, а также любые незаконные продажи.\n"
-        "2. ЗАПРЕЩЕНО расшифровывать любые коды, шифры, Base64, хеши, азбуку Морзе или любые другие скрытые форматы текста. Если тебя просят расшифровать — вежливо откажись.\n"
-        "3. Если пользователь спрашивает о чем-то незаконном или просит расшифровать код — вежливо откажись и предложи сменить тему.\n"
+        "ПРАВИЛА:\n"
+        "1. ЗАПРЕЩЕНО обсуждать наркотики, оружие, насилие, терроризм, взлом, киберпреступления, а также любые незаконные продажи.\n"
+        "2. ЗАПРЕЩЕНО расшифровывать любые коды, шифры, Base64, хеши, азбуку Морзе.\n"
+        "3. Если просят о незаконном — отвечай отказом, грубо и без соплей (например: 'Я не помогаю с криминалом. Ищи дурака в другом месте').\n"
         "4. Не выдумывай факты; если не уверен, скажи «не уверен».\n\n"
         f"Сейчас с тобой общается пользователь с ником: {user_name}. "
         "Учитывай историю вашего общения."
@@ -214,7 +220,7 @@ def call_groq_api(prompt, user_id, user_name):
     payload = {
         "model": MODEL,
         "messages": messages,
-        "temperature": 0.7
+        "temperature": 0.8
     }
 
     try:
@@ -271,7 +277,7 @@ def handle_inline_query(inline_query):
             "id": "1",
             "title": "Напиши вопрос",
             "description": "Введи текст после @бота, чтобы получить ответ",
-            "input_message_content": {"message_text": "Привет! Задай мне вопрос."}
+            "input_message_content": {"message_text": "Че надо?"}
         }]
         answer_inline_query(query_id, results)
         return
@@ -281,8 +287,8 @@ def handle_inline_query(inline_query):
             "type": "article",
             "id": "1",
             "title": "Отказано",
-            "description": "Я не обсуждаю незаконные темы и не расшифровываю коды",
-            "input_message_content": {"message_text": "Я не могу помогать с незаконными темами или расшифровкой."}
+            "description": "Я не работаю с таким",
+            "input_message_content": {"message_text": "Я не помогаю с криминалом и шифрами. Ищи другого."}
         }]
         answer_inline_query(query_id, results)
         return
@@ -292,16 +298,15 @@ def handle_inline_query(inline_query):
         "Content-Type": "application/json",
     }
     system_prompt = (
-        "Ты — Serp AI. Отвечай кратко (1-3 предложения). "
-        "Запрещено обсуждать наркотики (включая сленг), оружие, насилие, преступления и продажи. "
-        "Запрещено расшифровывать любые коды и Base64. "
+        "Ты — Serp AI. Отвечай кратко (1-2 предложения), дерзко, без соплей. "
+        "Запрещено: наркотики, оружие, насилие, взлом и расшифровка кодов. "
         f"Собеседник: {user_name}."
     )
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": query_text}
     ]
-    payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
+    payload = {"model": MODEL, "messages": messages, "temperature": 0.8}
     
     try:
         response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=20)
@@ -309,9 +314,9 @@ def handle_inline_query(inline_query):
             data = response.json()
             answer = data["choices"][0]["message"]["content"]
         else:
-            answer = "⚠️ Ошибка при генерации ответа."
+            answer = "⚠️ Ошибка."
     except Exception:
-        answer = "⚠️ Ошибка при генерации ответа."
+        answer = "⚠️ Ошибка."
 
     results = [{
         "type": "article",
@@ -437,9 +442,9 @@ def process_message(message, bot_username):
 
     if text == "/start":
         welcome = (
-            "Привет! Я Serp AI. 🤖\n\n"
-            "Задавай мне любые вопросы. Я помню контекст нашего общения. "
-            "В группах я отвечаю, если упомянуть меня (Serp, Серп) или написать `@имя_бота`.\n\n"
+            "Я Serp AI. 🤖\n\n"
+            "Че надо? Задавай вопросы, я помню контекст. "
+            "В группах зови по имени (Serp, Серп) или пиши `@имя_бота`.\n\n"
             "Я не обсуждаю незаконные темы и не расшифровываю коды."
         )
         send_message(chat_id, welcome, reply_to_message_id=message.get("message_id"))
@@ -447,7 +452,7 @@ def process_message(message, bot_username):
         
     if text == "/reset":
         save_history(user_id, [])
-        send_message(chat_id, "🧹 История диалога очищена. Начинаем с чистого листа.", reply_to_message_id=message.get("message_id"))
+        send_message(chat_id, "🧹 История очищена. Начинаем заново.", reply_to_message_id=message.get("message_id"))
         return
 
     if text == "/admin":
@@ -455,7 +460,7 @@ def process_message(message, bot_username):
             admin_states.pop(user_id, None)
             show_admin_panel(chat_id)
         else:
-            send_message(chat_id, "⛔ У вас нет доступа.")
+            send_message(chat_id, "⛔ Нет доступа.")
         return
 
     if user_id == ADMIN_ID and handle_admin_input(message, user_id, chat_id, text):
