@@ -12,12 +12,13 @@ load_dotenv()
 TG_TOKEN = os.getenv("TG_TOKEN")
 
 # ==========================================
-# ВСТАВЬ СВОИ КЛЮЧИ СЮДА (через запятую)
+# ВСТАВЬ СВОИ КЛЮЧИ СЮДА
 # ==========================================
 API_KEYS = [
-    "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",
-    "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"
+    os.getenv("GROQ_API_KEY"),   # Ключ 1 (из Render)
+    os.getenv("GROQ_API_KEY_2")  # Ключ 2 (из Render)
 ]
+# Если хочешь прописать прямо в коде, замени os.getenv(...) на "gsk_..."
 # ==========================================
 
 BASE_URL = os.getenv("BASE_URL", "https://api.groq.com/openai/v1")
@@ -30,12 +31,15 @@ BANNED_FILE = "banned_users.json"
 CHATS_FILE = "chats.json"
 FACTS_FILE = "facts.json"
 
-if not TG_TOKEN or not API_KEYS:
-    print("❌ Ошибка: проверьте TG_TOKEN и API_KEYS")
+if not TG_TOKEN or not API_KEYS[0]:
+    print("❌ Ошибка: проверьте TG_TOKEN и GROQ_API_KEY")
     raise SystemExit(1)
 
 TG_API_URL = f"https://api.telegram.org/bot{TG_TOKEN}"
 admin_states = {}
+
+# Глобальная переменная для хранения текущего ключа
+current_key_index = 0
 
 # ==========================================
 # ВЕБ-СЕРВЕР ДЛЯ RENDER
@@ -51,7 +55,7 @@ def run_web_server():
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# РАБОТА С ФАЙЛАМИ (ПАМЯТЬ)
+# РАБОТА С ФАЙЛАМИ
 # ==========================================
 def load_json(path, default):
     try:
@@ -144,19 +148,22 @@ def answer_inline_query(inline_query_id, results, cache_time=5):
     return api_post("answerInlineQuery", payload)
 
 # ==========================================
-# АДМИН-ПАНЕЛЬ
+# АДМИН-ПАНЕЛЬ (ДОБАВЛЕНА КНОПКА СМЕНЫ КЛЮЧА)
 # ==========================================
 def admin_keyboard():
     return {"inline_keyboard": [
         [{"text": "👥 Пользователи", "callback_data": "admin_users"}, {"text": "📢 Рассылка", "callback_data": "admin_broadcast"}],
         [{"text": "🔨 Бан", "callback_data": "admin_ban"}, {"text": "🔓 Разбан", "callback_data": "admin_unban"}],
+        [{"text": "⚙️ Сменить API-ключ", "callback_data": "admin_switch_key"}],
         [{"text": "❌ Отмена", "callback_data": "admin_cancel"}]
     ]}
 
 def show_admin_panel(chat_id):
+    global current_key_index
     users = load_users(); banned = load_banned()
     private_count = sum(1 for user in users.values() if user.get("private_chat_id"))
-    text = f"🔐 Админка\n\nЮзеров: {len(users)}\nДля рассылки: {private_count}\nВ бане: {len(banned)}\n\nВыбери:"
+    key_status = f"Ключ #{current_key_index + 1} (из {len(API_KEYS)})"
+    text = f"🔐 Админка\n\nЮзеров: {len(users)}\nДля рассылки: {private_count}\nВ бане: {len(banned)}\nАктивный API: {key_status}\n\nВыбери:"
     send_message(chat_id, text, reply_markup=admin_keyboard())
 
 # ==========================================
@@ -182,38 +189,39 @@ def is_safe(text):
 # ПАМЯТЬ (ФАКТЫ)
 # ==========================================
 def extract_facts(user_text, user_id):
+    global current_key_index
     prompt = (
         "Проанализируй текст. Если пользователь сообщает о себе какой-то постоянный факт (имя, возраст, город, профессия, хобби, предпочтения), "
-        "выдели этот факт в формате 'Факт: ...'. Если фактов нет, напиши 'Нет'. Отвечай только фактами, без лишнего текста.\n\n"
+        "выдели этот факт в формате 'Факт: ...'. Если фактов нет, напиши 'Нет'. Отвечай только фактами.\n\n"
         f"Текст: {user_text}"
     )
     payload = {"model": MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 50}
     
-    # Пробуем ключи по очереди
-    for key in API_KEYS:
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        try:
-            response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=10)
-            if response.status_code == 200:
-                result = response.json()["choices"][0]["message"]["content"].strip()
-                if result and result.lower() != "нет":
-                    clean_fact = result.replace("Факт:", "").strip()
-                    if clean_fact:
-                        save_fact(user_id, clean_fact)
-                break # Если сработало, выходим из цикла ключей
-        except:
-            continue
+    active_key = API_KEYS[current_key_index]
+    headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
+    try:
+        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=10)
+        if response.status_code == 200:
+            result = response.json()["choices"][0]["message"]["content"].strip()
+            if result and result.lower() != "нет":
+                clean_fact = result.replace("Факт:", "").strip()
+                if clean_fact:
+                    save_fact(user_id, clean_fact)
+    except:
+        pass
 
 # ==========================================
-# ОБЩЕНИЕ С ИИ (С ПЕРЕКЛЮЧЕНИЕМ КЛЮЧЕЙ)
+# ОБЩЕНИЕ С ИИ (ИСПОЛЬЗУЕТ ТЕКУЩИЙ КЛЮЧ)
 # ==========================================
 def call_groq_api(user_text, user_id, user_name, chat_id):
+    global current_key_index
+    
     if not is_safe(user_text):
         return "Я не могу обсуждать незаконные темы."
 
     extract_facts(user_text, user_id)
 
-    user_history = get_history(chat_id)[-10:] # Обрезаем для лимитов
+    user_history = get_history(chat_id)[-10:]
     user_facts = get_facts(user_id)
     facts_text = "\n".join([f"- {fact}" for fact in user_facts]) if user_facts else "Нет."
     
@@ -236,39 +244,32 @@ def call_groq_api(user_text, user_id, user_name, chat_id):
 
     payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
 
-    # --- ЛОГИКА ПЕРЕКЛЮЧЕНИЯ КЛЮЧЕЙ ---
-    for key_index, key in enumerate(API_KEYS):
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        try:
-            response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=20)
+    active_key = API_KEYS[current_key_index]
+    headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
+
+    try:
+        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=20)
+        
+        if response.status_code == 200:
+            data = response.json()
+            answer = data["choices"][0]["message"]["content"]
             
-            if response.status_code == 200:
-                data = response.json()
-                answer = data["choices"][0]["message"]["content"]
-                
-                if not is_safe(answer):
-                    return "Я не могу это обсуждать."
+            if not is_safe(answer):
+                return "Я не могу это обсуждать."
 
-                new_history = user_history + [
-                    {"role": "user", "content": user_text},
-                    {"role": "assistant", "content": answer}
-                ]
-                save_history(chat_id, new_history)
-                return answer
-                
-            elif response.status_code in (401, 429):
-                # Ключ не работает или лимит. Пробуем следующий.
-                print(f"Ключ #{key_index+1} не сработал (код {response.status_code}). Переключаюсь...")
-                continue
-            else:
-                print(f"Ошибка Groq: {response.status_code} - {response.text}")
-                return "⚠️ Ошибка при обращении к ИИ."
-                
-        except Exception as e:
-            print(f"Ошибка сети с ключом #{key_index+1}: {e}")
-            continue
-
-    return "⚠️ Все ключи сейчас недоступны. Попробуй позже."
+            new_history = user_history + [
+                {"role": "user", "content": user_text},
+                {"role": "assistant", "content": answer}
+            ]
+            save_history(chat_id, new_history)
+            return answer
+        elif response.status_code in (401, 429):
+            return f"⚠️ Ключ #{current_key_index + 1} не работает (ошибка {response.status_code}). Зайди в /admin и смени ключ."
+        else:
+            print(f"Groq API Error: {response.status_code} - {response.text}")
+            return "⚠️ Ошибка при обращении к ИИ."
+    except Exception as e:
+        return "⚠️ Ошибка сети."
 
 def should_reply(message, bot_username):
     text = message.get("text", "")
@@ -295,6 +296,7 @@ def get_bot_info():
 # ИНЛАЙН-РЕЖИМ
 # ==========================================
 def handle_inline_query(inline_query):
+    global current_key_index
     query_id = inline_query.get("id")
     query_text = inline_query.get("query", "").strip()
     if not query_text: return
@@ -306,27 +308,38 @@ def handle_inline_query(inline_query):
     messages = [{"role": "user", "content": query_text}]
     payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
     
-    answer = "⚠️ Ошибка."
-    for key in API_KEYS:
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        try:
-            response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=15)
-            if response.status_code == 200:
-                answer = response.json()["choices"][0]["message"]["content"]
-                break
-        except: continue
+    active_key = API_KEYS[current_key_index]
+    headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
+    
+    try:
+        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=15)
+        answer = response.json()["choices"][0]["message"]["content"] if response.status_code == 200 else "⚠️ Ошибка."
+    except: 
+        answer = "⚠️ Ошибка."
 
     results = [{"type": "article", "id": "1", "title": "Ответ", "description": answer[:100], "input_message_content": {"message_text": answer}}]
     answer_inline_query(query_id, results)
 
 # ==========================================
-# АДМИН-КОМАНДЫ
+# АДМИН-КОМАНДЫ (ЛОГИКА СМЕНЫ КЛЮЧА)
 # ==========================================
 def handle_admin_callback(callback):
+    global current_key_index
     user = callback.get("from", {}); user_id = user.get("id"); callback_id = callback.get("id"); data = callback.get("data", ""); chat_id = callback.get("message", {}).get("chat", {}).get("id")
+    
     if user_id != ADMIN_ID: return answer_callback(callback_id, "Нет доступа.")
     answer_callback(callback_id)
-    if data == "admin_users":
+    
+    if data == "admin_switch_key":
+        if len(API_KEYS) < 2:
+            send_message(chat_id, "⚠️ У вас добавлен только один ключ. Добавьте второй в Environment на Render.")
+            return show_admin_panel(chat_id)
+            
+        current_key_index = (current_key_index + 1) % len(API_KEYS)
+        send_message(chat_id, f"✅ API-ключ успешно сменен на #{current_key_index + 1}.")
+        show_admin_panel(chat_id)
+        
+    elif data == "admin_users":
         users = load_users(); banned = load_banned()
         lines = [f"Юзеров: {len(users)}", f"Бан: {len(banned)}", ""]
         for key, record in list(users.items())[-15:]:
