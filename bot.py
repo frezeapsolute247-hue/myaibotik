@@ -10,39 +10,25 @@ from threading import Thread
 load_dotenv()
 
 TG_TOKEN = os.getenv("TG_TOKEN")
+API_KEY = os.getenv("GROQ_API_KEY")
 
-# ==========================================
-# СПИСОК ВСЕХ API КЛЮЧЕЙ (ИЗ RENDER)
-# ==========================================
-API_KEYS = [
-    os.getenv("GROQ_API_KEY"),       # 0 - Groq 1
-    os.getenv("GROQ_API_KEY_2"),     # 1 - Groq 2
-    os.getenv("GEMINI_API_KEY"),     # 2 - Gemini
-    os.getenv("OPENROUTER_API_KEY")  # 3 - OpenRouter
-]
-
-# Настройки для каждого ключа (Адрес, Модель, Флаг для temperature)
-PROVIDERS = [
-    {"url": "https://api.groq.com/openai/v1", "model": "openai/gpt-oss-20b", "use_temp": True},
-    {"url": "https://api.groq.com/openai/v1", "model": "llama-3.1-8b-instant", "use_temp": True},
-    {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash", "use_temp": False},
-    {"url": "https://openrouter.ai/api/v1", "model": "google/gemma-4-31b-it:free", "use_temp": True}
-]
-# ==========================================
+# Настройки Groq
+BASE_URL = "https://api.groq.com/openai/v1"
+MODEL = "openai/gpt-oss-20b"
 
 ADMIN_ID = 755116310
+
 USERS_FILE = "users.json"
 BANNED_FILE = "banned_users.json"
 CHATS_FILE = "chats.json"
 FACTS_FILE = "facts.json"
 
-if not TG_TOKEN or not API_KEYS[0]:
-    print("❌ Ошибка: проверьте TG_TOKEN и GROQ_API_KEY")
+if not TG_TOKEN or not API_KEY:
+    print("❌ Ошибка: проверьте TG_TOKEN и GROQ_API_KEY в настройках Render")
     raise SystemExit(1)
 
 TG_API_URL = f"https://api.telegram.org/bot{TG_TOKEN}"
 admin_states = {}
-current_key_index = 0
 
 # ==========================================
 # ВЕБ-СЕРВЕР ДЛЯ RENDER
@@ -107,7 +93,7 @@ def get_history(chat_id):
 
 def save_history(chat_id, messages):
     chats = load_json(CHATS_FILE, {})
-    chats[str(chat_id)] = messages[-40:] # В файле храним 40
+    chats[str(chat_id)] = messages[-40:]
     save_json(CHATS_FILE, chats)
 
 def get_facts(user_id):
@@ -151,26 +137,19 @@ def answer_inline_query(inline_query_id, results, cache_time=5):
     return api_post("answerInlineQuery", payload)
 
 # ==========================================
-# АДМИН-ПАНЕЛЬ
+# АДМИН-ПАНЕЛЬ (БЕЗ СМЕНЫ КЛЮЧЕЙ)
 # ==========================================
 def admin_keyboard():
     return {"inline_keyboard": [
         [{"text": "👥 Пользователи", "callback_data": "admin_users"}, {"text": "📢 Рассылка", "callback_data": "admin_broadcast"}],
         [{"text": "🔨 Бан", "callback_data": "admin_ban"}, {"text": "🔓 Разбан", "callback_data": "admin_unban"}],
-        [{"text": "⚙️ Сменить API-ключ", "callback_data": "admin_switch_key"}],
         [{"text": "❌ Отмена", "callback_data": "admin_cancel"}]
     ]}
 
 def show_admin_panel(chat_id):
-    global current_key_index
     users = load_users(); banned = load_banned()
     private_count = sum(1 for user in users.values() if user.get("private_chat_id"))
-    
-    provider_names = ["Groq (Key 1)", "Groq (Key 2)", "Gemini", "OpenRouter (Gemma)"]
-    provider_name = provider_names[current_key_index] if current_key_index < len(provider_names) else f"API #{current_key_index + 1}"
-    key_status = f"Ключ #{current_key_index + 1} ({provider_name})"
-    
-    text = f"🔐 Админка\n\nЮзеров: {len(users)}\nДля рассылки: {private_count}\nВ бане: {len(banned)}\nАктивный API: {key_status}\n\nВыбери:"
+    text = f"🔐 Админка\n\nЮзеров: {len(users)}\nДля рассылки: {private_count}\nВ бане: {len(banned)}\n\nВыбери:"
     send_message(chat_id, text, reply_markup=admin_keyboard())
 
 # ==========================================
@@ -196,25 +175,17 @@ def is_safe(text):
 # ПАМЯТЬ (ФАКТЫ)
 # ==========================================
 def extract_facts(user_text, user_id):
-    global current_key_index
     prompt = (
         "Проанализируй текст. Если пользователь сообщает о себе какой-то постоянный факт (имя, возраст, город, профессия, хобби, предпочтения), "
         "выдели этот факт в формате 'Факт: ...'. Если фактов нет, напиши 'Нет'. Отвечай только фактами.\n\n"
         f"Текст: {user_text}"
     )
     
-    provider = PROVIDERS[current_key_index]
-    payload = {"model": provider["model"], "messages": [{"role": "user", "content": prompt}], "max_tokens": 50}
-
-    if provider.get("use_temp"):
-        payload["temperature"] = 0.1
+    payload = {"model": MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 50}
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     
-    active_key = API_KEYS[current_key_index]
-    if not active_key: return
-    
-    headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
     try:
-        response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=10)
+        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=10)
         if response.status_code == 200:
             result = response.json()["choices"][0]["message"]["content"].strip()
             if result and result.lower() != "нет":
@@ -225,17 +196,15 @@ def extract_facts(user_text, user_id):
         pass
 
 # ==========================================
-# ОБЩЕНИЕ С ИИ
+# ОБЩЕНИЕ С ИИ (GROQ)
 # ==========================================
 def call_ai_api(user_text, user_id, user_name, chat_id):
-    global current_key_index
-    
     if not is_safe(user_text):
         return "Я не могу обсуждать незаконные темы."
 
     extract_facts(user_text, user_id)
 
-    # Отправляем только последние 8 сообщений для экономии токенов
+    # Обрезаем историю до 8 сообщений для экономии токенов
     user_history = get_history(chat_id)[-8:]
     user_facts = get_facts(user_id)
     facts_text = "\n".join([f"- {fact}" for fact in user_facts]) if user_facts else "Нет."
@@ -257,20 +226,11 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
     messages.extend(user_history)
     messages.append({"role": "user", "content": f"<untrusted>\n{user_text}\n</untrusted>"})
 
-    provider = PROVIDERS[current_key_index]
-    payload = {"model": provider["model"], "messages": messages}
-
-    if provider.get("use_temp"):
-        payload["temperature"] = 0.7
-
-    active_key = API_KEYS[current_key_index]
-    if not active_key:
-        return f"⚠️ Ключ #{current_key_index + 1} пуст. Зайди в /admin и переключи."
-
-    headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
+    payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
     try:
-        response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=25)
+        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=25)
         
         if response.status_code == 200:
             data = response.json()
@@ -285,8 +245,8 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
             ]
             save_history(chat_id, new_history[-40:])
             return answer
-        elif response.status_code in (401, 429):
-            return f"⚠️ Ключ #{current_key_index + 1} не работает (ошибка {response.status_code}). Зайди в /admin и смени ключ."
+        elif response.status_code == 429:
+            return "⚠️ Слишком много запросов. Подожди немного."
         else:
             print(f"API Error: {response.status_code} - {response.text}")
             return "⚠️ Ошибка при обращении к ИИ."
@@ -319,7 +279,6 @@ def get_bot_info():
 # ИНЛАЙН-РЕЖИМ
 # ==========================================
 def handle_inline_query(inline_query):
-    global current_key_index
     query_id = inline_query.get("id")
     query_text = inline_query.get("query", "").strip()
     if not query_text: return
@@ -328,20 +287,12 @@ def handle_inline_query(inline_query):
         answer_inline_query(query_id, results)
         return
     
-    provider = PROVIDERS[current_key_index]
     messages = [{"role": "user", "content": query_text}]
-    payload = {"model": provider["model"], "messages": messages}
-
-    if provider.get("use_temp"):
-        payload["temperature"] = 0.7
-    
-    active_key = API_KEYS[current_key_index]
-    if not active_key: return
-
-    headers = {"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"}
+    payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
+    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     
     try:
-        response = requests.post(f"{provider['url']}/chat/completions", headers=headers, json=payload, timeout=15)
+        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=15)
         answer = response.json()["choices"][0]["message"]["content"] if response.status_code == 200 else "⚠️ Ошибка."
     except: 
         answer = "⚠️ Ошибка."
@@ -353,26 +304,12 @@ def handle_inline_query(inline_query):
 # АДМИН-КОМАНДЫ
 # ==========================================
 def handle_admin_callback(callback):
-    global current_key_index
     user = callback.get("from", {}); user_id = user.get("id"); callback_id = callback.get("id"); data = callback.get("data", ""); chat_id = callback.get("message", {}).get("chat", {}).get("id")
     
     if user_id != ADMIN_ID: return answer_callback(callback_id, "Нет доступа.")
     answer_callback(callback_id)
     
-    if data == "admin_switch_key":
-        if len(API_KEYS) < 2:
-            send_message(chat_id, "⚠️ У вас добавлен только один ключ.")
-            return show_admin_panel(chat_id)
-            
-        for _ in range(len(API_KEYS)):
-            current_key_index = (current_key_index + 1) % len(API_KEYS)
-            if API_KEYS[current_key_index]:
-                break
-                
-        send_message(chat_id, f"✅ API-ключ успешно сменен на #{current_key_index + 1}.")
-        show_admin_panel(chat_id)
-        
-    elif data == "admin_users":
+    if data == "admin_users":
         users = load_users(); banned = load_banned()
         lines = [f"Юзеров: {len(users)}", f"Бан: {len(banned)}", ""]
         for key, record in list(users.items())[-15:]:
@@ -459,7 +396,7 @@ def process_message(message, bot_username):
 def main():
     Thread(target=run_web_server).start()
     bot_username = get_bot_info()
-    print(f"🚀 Бот @{bot_username} запущен.")
+    print(f"🚀 Бот @{bot_username} запущен. Модель: {MODEL}")
     offset = 0
     while True:
         try:
