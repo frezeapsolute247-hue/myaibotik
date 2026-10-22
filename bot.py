@@ -17,7 +17,6 @@ BASE_URL = "https://api.groq.com/openai/v1"
 MODEL = "openai/gpt-oss-20b"
 
 ADMIN_ID = 755116310
-
 USERS_FILE = "users.json"
 BANNED_FILE = "banned_users.json"
 CHATS_FILE = "chats.json"
@@ -137,7 +136,7 @@ def answer_inline_query(inline_query_id, results, cache_time=5):
     return api_post("answerInlineQuery", payload)
 
 # ==========================================
-# АДМИН-ПАНЕЛЬ (БЕЗ СМЕНЫ КЛЮЧЕЙ)
+# АДМИН-ПАНЕЛЬ
 # ==========================================
 def admin_keyboard():
     return {"inline_keyboard": [
@@ -172,40 +171,16 @@ def is_safe(text):
     return True
 
 # ==========================================
-# ПАМЯТЬ (ФАКТЫ)
-# ==========================================
-def extract_facts(user_text, user_id):
-    prompt = (
-        "Проанализируй текст. Если пользователь сообщает о себе какой-то постоянный факт (имя, возраст, город, профессия, хобби, предпочтения), "
-        "выдели этот факт в формате 'Факт: ...'. Если фактов нет, напиши 'Нет'. Отвечай только фактами.\n\n"
-        f"Текст: {user_text}"
-    )
-    
-    payload = {"model": MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 50}
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    
-    try:
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=10)
-        if response.status_code == 200:
-            result = response.json()["choices"][0]["message"]["content"].strip()
-            if result and result.lower() != "нет":
-                clean_fact = result.replace("Факт:", "").strip()
-                if clean_fact:
-                    save_fact(user_id, clean_fact)
-    except:
-        pass
-
-# ==========================================
-# ОБЩЕНИЕ С ИИ (GROQ)
+# ОБЩЕНИЕ С ИИ
 # ==========================================
 def call_ai_api(user_text, user_id, user_name, chat_id):
     if not is_safe(user_text):
         return "Я не могу обсуждать незаконные темы."
 
-    extract_facts(user_text, user_id)
+    # Защита от пустых сообщений в истории
+    raw_history = get_history(chat_id)[-4:]
+    user_history = [msg for msg in raw_history if msg.get("content") and str(msg.get("content")).strip()]
 
-    # Обрезаем историю до 8 сообщений для экономии токенов
-    user_history = get_history(chat_id)[-8:]
     user_facts = get_facts(user_id)
     facts_text = "\n".join([f"- {fact}" for fact in user_facts]) if user_facts else "Нет."
     
@@ -226,7 +201,13 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
     messages.extend(user_history)
     messages.append({"role": "user", "content": f"<untrusted>\n{user_text}\n</untrusted>"})
 
-    payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 500,
+        "reasoning_effort": "low"  # Обязательно для gpt-oss-20b
+    }
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
     try:
@@ -236,6 +217,9 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
             data = response.json()
             answer = data["choices"][0]["message"]["content"]
             
+            if not answer or not str(answer).strip():
+                return "⚠️ ИИ вернул пустой ответ. Попробуй еще раз."
+
             if not is_safe(answer):
                 return "Я не могу это обсуждать."
 
@@ -246,8 +230,9 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
             save_history(chat_id, new_history[-40:])
             return answer
         elif response.status_code == 429:
-            return "⚠️ Слишком много запросов. Подожди немного."
+            return "⚠️ Лимит Groq исчерпан. Подожди до ночи."
         else:
+            # Выводим реальную ошибку в консоль Render, чтобы понять причину
             print(f"API Error: {response.status_code} - {response.text}")
             return "⚠️ Ошибка при обращении к ИИ."
     except Exception as e:
@@ -288,7 +273,13 @@ def handle_inline_query(inline_query):
         return
     
     messages = [{"role": "user", "content": query_text}]
-    payload = {"model": MODEL, "messages": messages, "temperature": 0.7}
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 300,
+        "reasoning_effort": "low"
+    }
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     
     try:
@@ -377,6 +368,13 @@ def process_message(message, bot_username):
     if should_reply(message, bot_username):
         text_lower = text.lower()
         
+        if "запомни" in text_lower:
+            fact = text_lower.replace("запомни", "").strip()
+            if fact:
+                save_fact(user_id, fact)
+                send_message(chat_id, "Запомнил.", reply_to_message_id=message.get("message_id"))
+                return
+
         if user_id == ADMIN_ID and any(word in text_lower for word in ["забудь", "не пиши это"]):
             save_history(chat_id, [])
             send_message(chat_id, "Понял. Я это забыл.", reply_to_message_id=message.get("message_id"))
