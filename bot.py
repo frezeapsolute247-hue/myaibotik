@@ -43,7 +43,7 @@ def run_web_server():
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# РАБОТА С ФАЙЛАМИ (ПАМЯТЬ)
+# РАБОТА С ФАЙЛАМИ
 # ==========================================
 def load_json(path, default):
     try:
@@ -171,13 +171,12 @@ def is_safe(text):
     return True
 
 # ==========================================
-# ОБЩЕНИЕ С ИИ
+# ОБЩЕНИЕ С ИИ (С ВЫВОДОМ ОШИБКИ В ЧАТ)
 # ==========================================
 def call_ai_api(user_text, user_id, user_name, chat_id):
     if not is_safe(user_text):
         return "Я не могу обсуждать незаконные темы."
 
-    # Защита от пустых сообщений в истории
     raw_history = get_history(chat_id)[-4:]
     user_history = [msg for msg in raw_history if msg.get("content") and str(msg.get("content")).strip()]
 
@@ -206,7 +205,7 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
         "messages": messages,
         "temperature": 0.7,
         "max_tokens": 500,
-        "reasoning_effort": "low"  # Обязательно для gpt-oss-20b
+        "reasoning_effort": "low" 
     }
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
@@ -232,12 +231,10 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
         elif response.status_code == 429:
             return "⚠️ Лимит Groq исчерпан. Подожди до ночи."
         else:
-            # Выводим реальную ошибку в консоль Render, чтобы понять причину
-            print(f"API Error: {response.status_code} - {response.text}")
-            return "⚠️ Ошибка при обращении к ИИ."
+            # ВРЕМЕННО ВЫВОДИМ ОШИБКУ ПРЯМО В ЧАТ
+            return f"⚠️ Ошибка Groq: {response.status_code}. Текст: {response.text[:250]}"
     except Exception as e:
-        print(f"Exception: {e}")
-        return "⚠️ Ошибка сети."
+        return f"⚠️ Ошибка сети: {str(e)}"
 
 def should_reply(message, bot_username):
     text = message.get("text", "")
