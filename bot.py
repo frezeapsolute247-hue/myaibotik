@@ -12,9 +12,9 @@ load_dotenv()
 TG_TOKEN = os.getenv("TG_TOKEN")
 API_KEY = os.getenv("GROQ_API_KEY")
 
-# Настройки Groq
+# Настройки Groq (Модель изменена на разрешенную)
 BASE_URL = "https://api.groq.com/openai/v1"
-MODEL = "openai/gpt-oss-20b"
+MODEL = "openai/gpt-oss-120b"
 
 ADMIN_ID = 755116310
 USERS_FILE = "users.json"
@@ -43,7 +43,7 @@ def run_web_server():
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# РАБОТА С ФАЙЛАМИ
+# РАБОТА С ФАЙЛАМИ (ПАМЯТЬ)
 # ==========================================
 def load_json(path, default):
     try:
@@ -171,13 +171,14 @@ def is_safe(text):
     return True
 
 # ==========================================
-# ОБЩЕНИЕ С ИИ (С ВЫВОДОМ ОШИБКИ В ЧАТ)
+# ОБЩЕНИЕ С ИИ
 # ==========================================
 def call_ai_api(user_text, user_id, user_name, chat_id):
     if not is_safe(user_text):
         return "Я не могу обсуждать незаконные темы."
 
-    raw_history = get_history(chat_id)[-4:]
+    # Берем историю, фильтруем пустые сообщения
+    raw_history = get_history(chat_id)[-8:]
     user_history = [msg for msg in raw_history if msg.get("content") and str(msg.get("content")).strip()]
 
     user_facts = get_facts(user_id)
@@ -205,7 +206,7 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
         "messages": messages,
         "temperature": 0.7,
         "max_tokens": 500,
-        "reasoning_effort": "low" 
+        "reasoning_effort": "low"
     }
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
@@ -231,10 +232,11 @@ def call_ai_api(user_text, user_id, user_name, chat_id):
         elif response.status_code == 429:
             return "⚠️ Лимит Groq исчерпан. Подожди до ночи."
         else:
-            # ВРЕМЕННО ВЫВОДИМ ОШИБКУ ПРЯМО В ЧАТ
-            return f"⚠️ Ошибка Groq: {response.status_code}. Текст: {response.text[:250]}"
+            print(f"API Error: {response.status_code} - {response.text}")
+            return "⚠️ Ошибка при обращении к ИИ."
     except Exception as e:
-        return f"⚠️ Ошибка сети: {str(e)}"
+        print(f"Exception: {e}")
+        return "⚠️ Ошибка сети."
 
 def should_reply(message, bot_username):
     text = message.get("text", "")
