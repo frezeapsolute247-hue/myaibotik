@@ -1,7 +1,7 @@
 """Настройки SERP CASINO. Токены вписываешь сам, в архив/чат их больше не кидай."""
 
 # ── Токены ───────────────────────────────────────────────────────────────
-BOT_TOKEN = "9146869125:AAFZRu06A2E8RK9w909b-tkPYa7utBppZL0"          # токен бота из @BotFather
+BOT_TOKEN = "9146869125:AAFMyC5e32DF4Jpz7Mrno5HQs_Z3rmU1nQ8"          # токен бота из @BotFather
 
 # ВОТ ТУТ ТОКЕН xRocket (Pay API token из бота @xRocket)
 XROCKET_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhcHBJZCI6IjMwOTgyNCIsImp0aSI6ImFwcDozMDk4MjQ6MjI3NThiMjktNzk0NS00YWFlLThmYzMtZDExMjhhNzZkNjg0IiwiaWF0IjoxNzk0ODE5MzU4fQ.oPcGy5_wVRg5Klk_VJaHnxi4zOcFVLjVzgRHhVz2rxo"
